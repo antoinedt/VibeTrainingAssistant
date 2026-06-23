@@ -1,7 +1,6 @@
 package com.vibetraining.assistant.data
 
 import org.json.JSONArray
-import org.json.JSONObject
 import java.security.MessageDigest
 
 /** Berlin cycle figures derived from the live training log. */
@@ -130,54 +129,11 @@ object CompareRenderer {
         }
     }
 
-    /** Renders the Key Insights cards. */
-    fun insightsHtml(insights: List<Insight>): String = buildString {
-        for (it in insights) {
-            append("<div class=\"insight\"><div class=\"i-label\">")
-            append(escape(it.label)).append("</div><div class=\"i-val\">")
-            append(escape(it.value)).append("</div></div>")
-        }
-    }
-
-    /** Compact JSON of all three cycles' headline numbers, for the Claude prompt. */
-    fun factsJson(facts: BerlinFacts): String {
-        val berlin = JSONObject()
-            .put("actual_weeks", facts.actualN)
-            .put("km_so_far", facts.kmSoFar)
-            .put("avg_weekly_km", facts.avgWeekly)
-            .put("peak_week", facts.peakWeek)
-            .put("peak_long_run", facts.peakLong)
-            .put("activities", facts.actCount)
-            .put("weekly_km", JSONArray(facts.km))
-            .put("long_runs", JSONArray(facts.lng))
-            .put("mix_easy_tempo_long_race_bike_weights", JSONArray(facts.mix))
-        val montreal = JSONObject(
-            mapOf(
-                "race_time" to "3:58:37", "total_km" to 1051, "peak_week_km" to 64.3,
-                "peak_long_km" to 29.3, "avg_weekly_km" to 40.4, "activities" to 109,
-                "result" to "first marathon"
-            )
-        )
-        val chicago = JSONObject(
-            mapOf(
-                "race_time" to "3:43:55", "total_km" to 698, "peak_week_km" to 53.9,
-                "peak_long_km" to 23.5, "avg_weekly_km" to 26.9, "activities" to 73,
-                "result" to "15 min PR"
-            )
-        )
-        return JSONObject()
-            .put("goal", "Berlin 2026 sub-3:30 (target 3:25-3:29)")
-            .put("montreal_2022", montreal)
-            .put("chicago_2024", chicago)
-            .put("berlin_2026", berlin)
-            .toString()
-    }
-
-    /** Substitutes every placeholder in the bundled template. */
+    /** Substitutes every placeholder in the bundled template. The Key Insights
+     *  are static text in the template, so nothing AI-generated is injected. */
     fun fillTemplate(
         template: String,
         facts: BerlinFacts,
-        insightsHtml: String,
         checksum: String
     ): String = template
         .replace("__DATA_CHECKSUM__", checksum)
@@ -194,18 +150,12 @@ object CompareRenderer {
         .replace("__BER_PEAK_LONG__", facts.peakLong)
         .replace("__BER_AVG__", facts.avgWeekly)
         .replace("__BER_ACT_COUNT__", facts.actCount.toString())
-        .replace("__INSIGHTS__", insightsHtml)
 
-    /** Reads the checksum stored in a previously generated comparison page. */
+    /** Reads the checksum stored in a previously generated comparison page, used
+     *  to skip rewriting Drive when the data hasn't changed. */
     fun extractChecksum(html: String): String? =
         Regex("""<meta name="data-checksum" content="([^"]*)"""")
             .find(html)?.groupValues?.get(1)?.takeIf { it.isNotBlank() && it != "__DATA_CHECKSUM__" }
-
-    /** Reads back the previously rendered insight cards so we can reuse them
-     *  when the data hasn't changed (no Claude call needed). */
-    fun extractInsightsHtml(html: String): String? =
-        Regex("""<div class="insight-grid">(.*?)</div>\s*</div>\s*<script""", RegexOption.DOT_MATCHES_ALL)
-            .find(html)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() && it != "__INSIGHTS__" }
 
     // ── formatting helpers ──────────────────────────────────────────────────
     private fun round1(v: Double): Double = Math.round(v * 10.0) / 10.0
@@ -216,7 +166,4 @@ object CompareRenderer {
 
     private fun jsArray(values: List<Double>): String =
         values.joinToString(",", "[", "]") { num(it) }
-
-    private fun escape(s: String): String = s
-        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 }
