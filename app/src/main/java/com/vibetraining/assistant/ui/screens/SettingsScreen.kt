@@ -31,6 +31,11 @@ fun SettingsScreen(onBack: () -> Unit) {
     var clientSecret by remember(prefs.stravaClientSecret) { mutableStateOf(prefs.stravaClientSecret) }
     var secretVisible by remember { mutableStateOf(false) }
 
+    // Only enable Save when the fields differ from what's already stored, so an
+    // unchanged form leaves the button greyed out and inert.
+    val hasChanges = clientId.trim() != prefs.stravaClientId ||
+        clientSecret.trim() != prefs.stravaClientSecret
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHost) },
         topBar = {
@@ -94,6 +99,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                         snackbarHost.showSnackbar("Saved")
                     }
                 },
+                enabled = hasChanges,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Save")
