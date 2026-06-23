@@ -19,7 +19,7 @@ android {
         versionCode = buildNumber
         versionName = "1.0.$buildNumber"
 
-        manifestPlaceholders["stravaRedirectHost"] = "vibetraining"
+        manifestPlaceholders["stravaRedirectHost"] = "strava-auth"
         manifestPlaceholders["stravaRedirectScheme"] = "vibe"
     }
 

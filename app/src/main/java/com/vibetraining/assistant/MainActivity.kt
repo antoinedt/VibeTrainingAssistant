@@ -32,11 +32,11 @@ class MainActivity : ComponentActivity() {
         handleStravaRedirect(intent)
     }
 
-    /** Forwards the Strava OAuth result (vibe://vibetraining?code=… or ?error=…)
+    /** Forwards the Strava OAuth result (vibe://strava-auth?code=… or ?error=…)
      *  to the sync coroutine. An empty string signals denial/cancellation. */
     private fun handleStravaRedirect(intent: Intent?) {
         val data = intent?.data ?: return
-        if (data.scheme == "vibe" && data.host == "vibetraining") {
+        if (data.scheme == "vibe" && data.host == "strava-auth") {
             val code = data.getQueryParameter("code")
             StravaAuthBus.codes.trySend(code ?: "")
         }
