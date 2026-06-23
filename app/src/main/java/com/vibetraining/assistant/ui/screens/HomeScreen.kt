@@ -2,6 +2,8 @@ package com.vibetraining.assistant.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -15,12 +17,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.Scope
+import com.google.api.services.drive.DriveScopes
 import com.vibetraining.assistant.data.AppPreferences
+import com.vibetraining.assistant.data.DriveService
 import com.vibetraining.assistant.data.PreferencesManager
+import com.vibetraining.assistant.data.StravaActivity
 import com.vibetraining.assistant.data.StravaAuthBus
 import com.vibetraining.assistant.data.StravaService
+import com.vibetraining.assistant.data.SyncReconciler
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,11 +46,20 @@ fun HomeScreen(
 
     val context = LocalContext.current
     val prefsManager = remember { PreferencesManager(context) }
+    val driveService = remember { DriveService(context) }
     val prefs by prefsManager.preferences.collectAsState(initial = AppPreferences())
     val scope = rememberCoroutineScope()
 
-    val syncing = syncState is SyncState.Loading
+    // The interactive reconciliation set, populated once new activities are found.
+    var reconcileActivities by remember { mutableStateOf<List<StravaActivity>?>(null) }
+    var reconcileWeeks by remember { mutableStateOf<JSONArray?>(null) }
+    var reconcileOriginal by remember { mutableStateOf("") }
+    var pendingSync by remember { mutableStateOf(false) }
 
+    val busy = syncState is SyncState.Loading || reconcileActivities != null
+
+    // Pulls activities from Strava, diffs them against the Drive training log, and
+    // hands any new ones to the reconciliation wizard. Assumes Google is signed in.
     fun runSync() {
         scope.launch {
             try {
@@ -47,7 +69,6 @@ fun HomeScreen(
                 val nowSec = System.currentTimeMillis() / 1000
 
                 if (prefs.stravaRefreshToken.isBlank()) {
-                    // First time: send the user through Strava's authorization page.
                     syncState = SyncState.Loading("Authorizing with Strava…")
                     while (StravaAuthBus.codes.tryReceive().isSuccess) { /* drain stale codes */ }
                     context.startActivity(
@@ -59,7 +80,6 @@ fun HomeScreen(
                     prefsManager.saveStravaTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAt)
                     accessToken = tokens.accessToken
                 } else if (prefs.stravaExpiresAt - 60 <= nowSec) {
-                    // Access token expired (or about to) — refresh it.
                     syncState = SyncState.Loading("Refreshing Strava session…")
                     val tokens = StravaService.refresh(clientId, clientSecret, prefs.stravaRefreshToken)
                     prefsManager.saveStravaTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAt)
@@ -68,17 +88,85 @@ fun HomeScreen(
 
                 syncState = SyncState.Loading("Fetching activities from Strava…")
                 val activities = StravaService.listActivities(accessToken)
-                val runKm = activities
-                    .filter { it.type.contains("Run", ignoreCase = true) }
-                    .sumOf { it.distanceMeters } / 1000.0
 
-                syncState = SyncState.Success(
-                    "Synced ${activities.size} activities · ${"%.0f".format(runKm)} km running.\n" +
-                        "Writing back to the Training Log is coming next."
-                )
+                syncState = SyncState.Loading("Reading training log…")
+                val original = driveService.downloadTrainingDataText().getOrThrow()
+                val weeks = SyncReconciler.parseWeeks(original)
+                val known = SyncReconciler.existingStravaIds(weeks)
+                val fresh = activities
+                    .filter { it.id !in known }
+                    .sortedBy { it.startDateLocal }
+
+                if (fresh.isEmpty()) {
+                    syncState = SyncState.Success("No new activities. Training log is up to date.")
+                } else {
+                    reconcileOriginal = original
+                    reconcileWeeks = weeks
+                    reconcileActivities = fresh
+                    syncState = SyncState.Idle
+                }
             } catch (e: Exception) {
                 syncState = SyncState.Error(e.message ?: "Sync failed.")
             }
+        }
+    }
+
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        if (task.isSuccessful) {
+            if (pendingSync) { pendingSync = false; runSync() }
+        } else {
+            pendingSync = false
+            val code = (task.exception as? ApiException)?.statusCode
+            syncState = SyncState.Error(
+                "Google sign-in is required to update the training log" +
+                    (code?.let { " (code $it: ${GoogleSignInStatusCodes.getStatusCodeString(it)})" } ?: "") + "."
+            )
+        }
+    }
+
+    // Entry point for the Sync button: ensure credentials and a Google session,
+    // then run the sync (which may route through Strava authorization first).
+    fun startSync() {
+        if (prefs.stravaClientId.isBlank() || prefs.stravaClientSecret.isBlank()) {
+            onSettings()
+            return
+        }
+        if (driveService.isSignedIn()) {
+            runSync()
+        } else {
+            pendingSync = true
+            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestEmail()
+                .requestScopes(Scope(DriveScopes.DRIVE))
+                .build()
+            googleSignInLauncher.launch(GoogleSignIn.getClient(context, gso).signInIntent)
+        }
+    }
+
+    // Once every new activity has been processed, normalize and write back to Drive.
+    fun finishReconcile() {
+        val weeks = reconcileWeeks
+        val original = reconcileOriginal
+        val count = reconcileActivities?.size ?: 0
+        reconcileActivities = null
+        reconcileWeeks = null
+        if (weeks == null) return
+        scope.launch {
+            syncState = SyncState.Loading("Saving training log to Drive…")
+            val today = LocalDate.now()
+            SyncReconciler.cleanPastPending(weeks, today)
+            SyncReconciler.normalizeStatuses(weeks, today)
+            val text = SyncReconciler.serialize(original, weeks)
+            driveService.saveTrainingDataText(text).fold(
+                onSuccess = {
+                    val s = if (count == 1) "activity" else "activities"
+                    syncState = SyncState.Success("Training log updated · $count new $s logged.")
+                },
+                onFailure = { syncState = SyncState.Error("Drive save failed: ${it.message}") }
+            )
         }
     }
 
@@ -87,7 +175,7 @@ fun HomeScreen(
             TopAppBar(
                 title = {},
                 actions = {
-                    IconButton(onClick = onSettings, enabled = !syncing) {
+                    IconButton(onClick = onSettings, enabled = !busy) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
                 }
@@ -125,22 +213,15 @@ fun HomeScreen(
                     label = "Sync Activities",
                     description = "Pull from Strava · Update Drive",
                     icon = "🔄",
-                    enabled = !syncing,
-                    onClick = {
-                        if (prefs.stravaClientId.isBlank() || prefs.stravaClientSecret.isBlank()) {
-                            // No Strava credentials yet — send the user to set them up.
-                            onSettings()
-                        } else {
-                            runSync()
-                        }
-                    }
+                    enabled = !busy,
+                    onClick = { startSync() }
                 )
 
                 MainButton(
                     label = "Training Log",
                     description = "Berlin W1–W26",
                     icon = "🏃",
-                    enabled = !syncing,
+                    enabled = !busy,
                     onClick = onTraining
                 )
 
@@ -148,7 +229,7 @@ fun HomeScreen(
                     label = "Compare",
                     description = "Montréal · Chicago · Berlin",
                     icon = "📊",
-                    enabled = !syncing,
+                    enabled = !busy,
                     onClick = onCompare
                 )
             }
@@ -189,6 +270,16 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    val toReconcile = reconcileActivities
+    val weeksToReconcile = reconcileWeeks
+    if (toReconcile != null && weeksToReconcile != null) {
+        SyncReconcileDialog(
+            activities = toReconcile,
+            weeks = weeksToReconcile,
+            onFinished = { finishReconcile() }
+        )
     }
 }
 
