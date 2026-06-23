@@ -57,8 +57,10 @@ dependencies {
     implementation(libs.retrofit.gson)
     implementation(libs.okhttp.logging)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.datastore.preferences)
     implementation(libs.google.api.client.android)
     implementation(libs.google.api.services.drive)
     implementation(libs.google.auth.library.oauth2)
+    implementation(libs.google.play.services.auth)
     debugImplementation(libs.androidx.ui.tooling)
 }
