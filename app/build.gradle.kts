@@ -19,6 +19,19 @@ android {
         manifestPlaceholders["stravaRedirectScheme"] = "vibe"
     }
 
+    signingConfigs {
+        // Fixed debug keystore committed to the repo so every build (including
+        // CI) produces an APK with a stable signing certificate. The SHA-1 of
+        // this key is registered with the Google Cloud OAuth client, which is
+        // required for Google Sign-In with the Drive scope to succeed.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

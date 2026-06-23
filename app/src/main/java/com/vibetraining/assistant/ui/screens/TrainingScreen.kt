@@ -17,6 +17,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 import com.google.api.services.drive.DriveScopes
 import com.vibetraining.assistant.data.DriveService
@@ -47,7 +49,9 @@ fun TrainingScreen(onBack: () -> Unit) {
                 loading = false
             }
         } else {
-            error = "Google sign-in failed"
+            val code = (task.exception as? ApiException)?.statusCode
+            error = "Google sign-in failed" +
+                (code?.let { " (code $it: ${GoogleSignInStatusCodes.getStatusCodeString(it)})" } ?: "")
         }
     }
 
