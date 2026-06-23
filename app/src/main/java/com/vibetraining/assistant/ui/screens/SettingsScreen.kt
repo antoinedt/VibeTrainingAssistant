@@ -4,8 +4,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -82,11 +80,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                                        else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 trailingIcon = {
-                    IconButton(onClick = { secretVisible = !secretVisible }) {
-                        Icon(
-                            if (secretVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = if (secretVisible) "Hide" else "Show"
-                        )
+                    TextButton(onClick = { secretVisible = !secretVisible }) {
+                        Text(if (secretVisible) "Hide" else "Show")
                     }
                 },
                 modifier = Modifier.fillMaxWidth()
