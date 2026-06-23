@@ -18,7 +18,6 @@ object PreferencesKeys {
     val STRAVA_ACCESS_TOKEN = stringPreferencesKey("strava_access_token")
     val STRAVA_REFRESH_TOKEN = stringPreferencesKey("strava_refresh_token")
     val STRAVA_EXPIRES_AT = longPreferencesKey("strava_expires_at")
-    val CLAUDE_API_KEY = stringPreferencesKey("claude_api_key")
 }
 
 data class AppPreferences(
@@ -26,8 +25,7 @@ data class AppPreferences(
     val stravaClientSecret: String = "",
     val stravaAccessToken: String = "",
     val stravaRefreshToken: String = "",
-    val stravaExpiresAt: Long = 0L,
-    val claudeApiKey: String = ""
+    val stravaExpiresAt: Long = 0L
 )
 
 class PreferencesManager(private val context: Context) {
@@ -38,8 +36,7 @@ class PreferencesManager(private val context: Context) {
             stravaClientSecret = prefs[PreferencesKeys.STRAVA_CLIENT_SECRET] ?: "",
             stravaAccessToken = prefs[PreferencesKeys.STRAVA_ACCESS_TOKEN] ?: "",
             stravaRefreshToken = prefs[PreferencesKeys.STRAVA_REFRESH_TOKEN] ?: "",
-            stravaExpiresAt = prefs[PreferencesKeys.STRAVA_EXPIRES_AT] ?: 0L,
-            claudeApiKey = prefs[PreferencesKeys.CLAUDE_API_KEY] ?: ""
+            stravaExpiresAt = prefs[PreferencesKeys.STRAVA_EXPIRES_AT] ?: 0L
         )
     }
 
@@ -47,12 +44,6 @@ class PreferencesManager(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[PreferencesKeys.STRAVA_CLIENT_ID] = clientId
             prefs[PreferencesKeys.STRAVA_CLIENT_SECRET] = clientSecret
-        }
-    }
-
-    suspend fun saveClaudeApiKey(apiKey: String) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.CLAUDE_API_KEY] = apiKey
         }
     }
 

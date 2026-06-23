@@ -93,13 +93,13 @@ class DriveService(private val context: Context) {
     }
 
     /**
-     * Builds the Cycle Comparison page. Berlin's charts/stats are always derived
-     * from the live training log; the Key Insights are regenerated via Claude
-     * only when the data has changed since the last build (tracked by a checksum
-     * embedded in the page). When anything changes, the fresh page is written
-     * back to Drive. [claudeApiKey] may be blank — then prior insights are kept.
+     * Builds the Cycle Comparison page. Berlin's charts and stats are derived
+     * from the live training log every time (Montreal/Chicago are fixed
+     * references; the Key Insights are static text in the template). When the
+     * training data has changed since the last build — tracked by a checksum
+     * embedded in the page — the fresh page is written back to Drive.
      */
-    suspend fun regenerateOrLoadComparison(claudeApiKey: String): Result<CompareResult> =
+    suspend fun regenerateOrLoadComparison(): Result<CompareResult> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val drive = buildDrive() ?: error("Not signed in to Google")
@@ -107,47 +107,17 @@ class DriveService(private val context: Context) {
                 val checksum = CompareRenderer.checksum(dataJs)
                 val facts = CompareRenderer.deriveFacts(CompareRenderer.parseWeeks(dataJs))
                 val template = loadAsset(COMPARE_ASSET)
+                val html = CompareRenderer.fillTemplate(template, facts, checksum)
 
                 val existing = runCatching { downloadText(drive, COMPARE_HTML_NAME) }.getOrNull()
                 val storedChecksum = existing?.let { CompareRenderer.extractChecksum(it) }
-                val storedInsights = existing?.let { CompareRenderer.extractInsightsHtml(it) }
-                val dataUnchanged = storedChecksum != null && storedChecksum == checksum
-
-                val needRegen = !dataUnchanged || storedInsights == null
-                var effectiveChecksum = checksum
-                val insightsHtml: String = when {
-                    !needRegen -> storedInsights!!
-                    else -> ClaudeService.generateInsights(claudeApiKey, CompareRenderer.factsJson(facts)).fold(
-                        onSuccess = { CompareRenderer.insightsHtml(it) },
-                        onFailure = { e ->
-                            // Keep good prior insights (charts still refresh); if there
-                            // are none, show a notice and leave the checksum unset so the
-                            // next open retries the Claude call.
-                            if (storedInsights != null) storedInsights
-                            else {
-                                effectiveChecksum = ""
-                                "<div class=\"insight\"><div class=\"i-label\">Insights unavailable</div>" +
-                                    "<div class=\"i-val\">${escapeHtml(e.message ?: "Could not reach Claude.")}</div></div>"
-                            }
-                        }
-                    )
-                }
-
-                val html = CompareRenderer.fillTemplate(template, facts, insightsHtml, effectiveChecksum)
-
-                // Persist when the data changed, on first build, or when we produced
-                // fresh insights — but never persist a failure (empty checksum).
-                val shouldWrite = (!dataUnchanged || existing == null || needRegen) &&
-                    effectiveChecksum == checksum
-                if (shouldWrite) {
+                val changed = storedChecksum == null || storedChecksum != checksum
+                if (changed) {
                     runCatching { uploadText(drive, COMPARE_HTML_NAME, html, "text/html") }
                 }
-                CompareResult(html = html, regenerated = shouldWrite && needRegen)
+                CompareResult(html = html, regenerated = changed)
             }
         }
 
     fun isSignedIn(): Boolean = GoogleSignIn.getLastSignedInAccount(context) != null
-
-    private fun escapeHtml(s: String): String =
-        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 }

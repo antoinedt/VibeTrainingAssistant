@@ -11,7 +11,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
@@ -20,8 +19,6 @@ import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 import com.google.api.services.drive.DriveScopes
 import com.vibetraining.assistant.data.DriveService
-import com.vibetraining.assistant.data.PreferencesManager
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -30,19 +27,14 @@ import kotlinx.coroutines.launch
 fun CompareScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val driveService = remember { DriveService(context) }
-    val prefsManager = remember { PreferencesManager(context) }
     val scope = rememberCoroutineScope()
     var htmlContent by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
-    var statusMsg by remember { mutableStateOf("Loading…") }
 
     suspend fun regenerate() {
         loading = true
-        statusMsg = "Checking for changes…"
-        val apiKey = prefsManager.preferences.first().claudeApiKey
-        if (apiKey.isNotBlank()) statusMsg = "Regenerating insights with Claude…"
-        driveService.regenerateOrLoadComparison(apiKey).fold(
+        driveService.regenerateOrLoadComparison().fold(
             onSuccess = { htmlContent = it.html },
             onFailure = { error = it.message }
         )
@@ -90,15 +82,7 @@ fun CompareScreen(onBack: () -> Unit) {
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when {
-                loading -> Column(
-                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    CircularProgressIndicator()
-                    Text(statusMsg, textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 error != null -> Column(
                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
