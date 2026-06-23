@@ -1,7 +1,9 @@
 package com.vibetraining.assistant.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
@@ -31,10 +33,14 @@ fun SettingsScreen(onBack: () -> Unit) {
     var clientSecret by remember(prefs.stravaClientSecret) { mutableStateOf(prefs.stravaClientSecret) }
     var secretVisible by remember { mutableStateOf(false) }
 
+    var claudeKey by remember(prefs.claudeApiKey) { mutableStateOf(prefs.claudeApiKey) }
+    var claudeKeyVisible by remember { mutableStateOf(false) }
+
     // Only enable Save when the fields differ from what's already stored, so an
     // unchanged form leaves the button greyed out and inert.
     val hasChanges = clientId.trim() != prefs.stravaClientId ||
-        clientSecret.trim() != prefs.stravaClientSecret
+        clientSecret.trim() != prefs.stravaClientSecret ||
+        claudeKey.trim() != prefs.claudeApiKey
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHost) },
@@ -53,6 +59,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -92,10 +99,41 @@ fun SettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxWidth()
             )
 
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text(
+                text = "Claude (AI Coach)",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = "Create an API key at console.anthropic.com. Used to analyse training " +
+                    "and regenerate the comparison. Stored only on this device.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            OutlinedTextField(
+                value = claudeKey,
+                onValueChange = { claudeKey = it },
+                label = { Text("Anthropic API Key") },
+                singleLine = true,
+                visualTransformation = if (claudeKeyVisible) VisualTransformation.None
+                                       else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    TextButton(onClick = { claudeKeyVisible = !claudeKeyVisible }) {
+                        Text(if (claudeKeyVisible) "Hide" else "Show")
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+
             Button(
                 onClick = {
                     scope.launch {
                         prefsManager.saveStravaCredentials(clientId.trim(), clientSecret.trim())
+                        prefsManager.saveClaudeApiKey(claudeKey.trim())
                         snackbarHost.showSnackbar("Saved")
                     }
                 },
