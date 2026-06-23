@@ -8,10 +8,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.vibetraining.assistant.data.AppPreferences
+import com.vibetraining.assistant.data.PreferencesManager
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -21,6 +24,10 @@ fun HomeScreen(
     onSettings: () -> Unit
 ) {
     var syncState by remember { mutableStateOf<SyncState>(SyncState.Idle) }
+
+    val context = LocalContext.current
+    val prefsManager = remember { PreferencesManager(context) }
+    val prefs by prefsManager.preferences.collectAsState(initial = AppPreferences())
 
     Scaffold(
         topBar = {
@@ -66,7 +73,14 @@ fun HomeScreen(
                     description = "Pull from Strava · Update Drive",
                     icon = "🔄",
                     enabled = syncState !is SyncState.Loading,
-                    onClick = { syncState = SyncState.Loading }
+                    onClick = {
+                        if (prefs.stravaClientId.isBlank() || prefs.stravaClientSecret.isBlank()) {
+                            // No Strava credentials yet — send the user to set them up.
+                            onSettings()
+                        } else {
+                            syncState = SyncState.Loading
+                        }
+                    }
                 )
 
                 MainButton(
