@@ -7,6 +7,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDate
+import java.time.ZoneOffset
 
 /** OAuth redirect target — must match the intent filter in AndroidManifest.xml
  *  and the Authorization Callback Domain (`strava-auth`) in the Strava app. */
@@ -14,6 +16,16 @@ const val STRAVA_REDIRECT_URI = "vibe://strava-auth"
 private const val STRAVA_SCOPE = "activity:read_all"
 private const val TOKEN_URL = "https://www.strava.com/oauth/token"
 private const val ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
+
+/** Berlin Marathon race day. */
+private val RACE_DAY: LocalDate = LocalDate.of(2026, 9, 27)
+/** Number of weeks in the training cycle we care about. */
+private const val TRAINING_WEEKS = 26L
+/** Epoch-second lower bound for synced activities: the start of the 26-week
+ *  cycle leading into Berlin. Anything earlier is outside the training plan and
+ *  only bloats the JSON, so we ask Strava to skip it entirely. */
+private val CYCLE_START_EPOCH: Long =
+    RACE_DAY.minusWeeks(TRAINING_WEEKS).atStartOfDay(ZoneOffset.UTC).toEpochSecond()
 
 data class StravaTokens(
     val accessToken: String,
@@ -76,14 +88,17 @@ object StravaService {
         }
     }
 
-    /** Fetches every activity for the athlete, paging until exhausted. */
+    /** Fetches the athlete's activities within the 26-week Berlin training
+     *  window (race day − 26 weeks → now), paging until exhausted. The `after`
+     *  filter keeps the sync — and the resulting JSON — light by excluding
+     *  anything before the cycle started. */
     suspend fun listActivities(accessToken: String): List<StravaActivity> = withContext(Dispatchers.IO) {
         val all = mutableListOf<StravaActivity>()
         var page = 1
         val perPage = 200
         while (true) {
             val req = Request.Builder()
-                .url("$ACTIVITIES_URL?per_page=$perPage&page=$page")
+                .url("$ACTIVITIES_URL?per_page=$perPage&page=$page&after=$CYCLE_START_EPOCH")
                 .header("Authorization", "Bearer $accessToken")
                 .build()
             val items = client.newCall(req).execute().use { resp ->
