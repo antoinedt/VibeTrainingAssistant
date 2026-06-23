@@ -12,8 +12,12 @@ android {
         applicationId = "com.vibetraining.assistant"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Derive a monotonically increasing version from the CI build number so
+        // each published APK is a proper update (installs over the previous one
+        // without an uninstall). Falls back to 1 for local builds.
+        val buildNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toIntOrNull() ?: 1
+        versionCode = buildNumber
+        versionName = "1.0.$buildNumber"
 
         manifestPlaceholders["stravaRedirectHost"] = "vibetraining"
         manifestPlaceholders["stravaRedirectScheme"] = "vibe"
