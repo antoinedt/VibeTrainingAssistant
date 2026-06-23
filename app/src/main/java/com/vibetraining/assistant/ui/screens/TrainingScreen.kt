@@ -68,7 +68,7 @@ fun TrainingScreen(onBack: () -> Unit) {
         } else {
             val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                 .requestEmail()
-                .requestScopes(Scope(DriveScopes.DRIVE_READONLY))
+                .requestScopes(Scope(DriveScopes.DRIVE))
                 .build()
             signInLauncher.launch(GoogleSignIn.getClient(context, gso).signInIntent)
         }

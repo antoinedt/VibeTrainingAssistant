@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Checksum of the training_data.js this page was generated from. The app
+     compares it to the live data to decide whether to regenerate insights. -->
+<meta name="data-checksum" content="__DATA_CHECKSUM__">
+<title>Marathon Training Comparison</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a; --text: #e8eaf0;
+    --muted: #7a7d8e; --mtl: #9b59b6; --chi: #e67e22; --ber: #e74c3c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; padding: 24px; min-height: 100vh; }
+  h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 28px; }
+  .legend-row { display: flex; gap: 20px; margin-bottom: 28px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 600; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 28px; }
+  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+  .stat-card.mtl { border-top: 3px solid var(--mtl); }
+  .stat-card.chi { border-top: 3px solid var(--chi); }
+  .stat-card.ber { border-top: 3px solid var(--ber); }
+  .stat-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 12px; font-weight: 600; }
+  .stat-city { font-size: 1rem; font-weight: 700; margin-bottom: 10px; }
+  .stat-city.mtl { color: var(--mtl); }
+  .stat-city.chi { color: var(--chi); }
+  .stat-city.ber { color: var(--ber); }
+  .stat-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .stat-name { font-size: 0.78rem; color: var(--muted); }
+  .stat-val { font-size: 0.92rem; font-weight: 600; }
+  .stat-val.big { font-size: 1.15rem; color: var(--text); }
+  .race-time { font-size: 1.5rem; font-weight: 800; margin: 10px 0 4px; }
+  .race-time.mtl { color: var(--mtl); }
+  .race-time.chi { color: var(--chi); }
+  .race-time.ber { color: var(--ber); }
+  .race-sub { font-size: 0.75rem; color: var(--muted); }
+  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+  .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .chart-card.full { grid-column: 1 / -1; }
+  .chart-title { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 16px; }
+  .mix-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px; }
+  .mix-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .mix-title { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 4px; }
+  .mix-sub { font-size: 0.75rem; color: var(--muted); margin-bottom: 14px; }
+  .mix-legend { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px 12px; }
+  .mix-item { display: flex; align-items: center; gap: 6px; font-size: 0.76rem; color: var(--muted); }
+  .mix-swatch { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+  .phase-note { font-size: 0.75rem; color: var(--muted); margin-top: 10px; }
+  .insights { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 20px; }
+  .insights h3 { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 14px; }
+  .insight-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .insight { border-left: 2px solid var(--border); padding-left: 12px; }
+  .insight .i-label { font-size: 0.72rem; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .05em; }
+  .insight .i-val { font-size: 0.88rem; font-weight: 600; line-height: 1.4; }
+  canvas { max-height: 280px; }
+  .full canvas { max-height: 220px; }
+  @media (max-width: 900px) {
+    .stats-grid, .charts-grid, .mix-grid { grid-template-columns: 1fr; }
+    .charts-grid .chart-card { grid-column: auto; }
+    .insight-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Marathon Training Comparison</h1>
+<p class="subtitle">26-week cycles aligned to race day — Montreal 2022 · Chicago 2024 · Berlin 2026</p>
+
+<div class="legend-row">
+  <div class="legend-item"><div class="dot" style="background:var(--mtl)"></div> Montreal Beneva 2022</div>
+  <div class="legend-item"><div class="dot" style="background:var(--chi)"></div> Chicago Marathon 2024</div>
+  <div class="legend-item"><div class="dot" style="background:var(--ber)"></div> Berlin Marathon 2026 <span style="color:var(--muted);font-weight:400;margin-left:4px">(W__BER_ACTUAL_N__+ actual)</span></div>
+</div>
+
+<!-- STATS CARDS -->
+<div class="stats-grid">
+  <div class="stat-card mtl">
+    <div class="stat-label">Cycle Overview</div>
+    <div class="stat-city mtl">Montreal Beneva 2022</div>
+    <div class="race-time mtl">3:58:37</div>
+    <div class="race-sub">Sep 25, 2022 &nbsp;·&nbsp; First marathon</div>
+    <div style="margin-top:14px">
+      <div class="stat-row"><span class="stat-name">Total km</span><span class="stat-val big">1 051 km</span></div>
+      <div class="stat-row"><span class="stat-name">Peak week</span><span class="stat-val">64.3 km (W23)</span></div>
+      <div class="stat-row"><span class="stat-name">Peak long run</span><span class="stat-val">29.3 km (W23)</span></div>
+      <div class="stat-row"><span class="stat-name">Avg weekly km</span><span class="stat-val">40.4 km</span></div>
+      <div class="stat-row"><span class="stat-name">Total activities</span><span class="stat-val">109</span></div>
+    </div>
+  </div>
+  <div class="stat-card chi">
+    <div class="stat-label">Cycle Overview</div>
+    <div class="stat-city chi">Chicago Marathon 2024</div>
+    <div class="race-time chi">3:43:55</div>
+    <div class="race-sub">Oct 13, 2024 &nbsp;·&nbsp; 15 min PR</div>
+    <div style="margin-top:14px">
+      <div class="stat-row"><span class="stat-name">Total km</span><span class="stat-val big">698 km</span></div>
+      <div class="stat-row"><span class="stat-name">Peak week</span><span class="stat-val">53.9 km (W23)</span></div>
+      <div class="stat-row"><span class="stat-name">Peak long run</span><span class="stat-val">23.5 km (W23)</span></div>
+      <div class="stat-row"><span class="stat-name">Avg weekly km</span><span class="stat-val">26.9 km</span></div>
+      <div class="stat-row"><span class="stat-name">Total activities</span><span class="stat-val">73</span></div>
+    </div>
+  </div>
+  <div class="stat-card ber">
+    <div class="stat-label">Cycle Overview</div>
+    <div class="stat-city ber">Berlin Marathon 2026</div>
+    <div class="race-time ber">3:25–3:29</div>
+    <div class="race-sub">Sep 27, 2026 &nbsp;·&nbsp; Goal (W__BER_ACTUAL_N__ of 26)</div>
+    <div style="margin-top:14px">
+      <div class="stat-row"><span class="stat-name">Km so far (W__BER_ACTUAL_N__)</span><span class="stat-val big">__BER_KM_SOFAR__ km</span></div>
+      <div class="stat-row"><span class="stat-name">Peak week so far</span><span class="stat-val">__BER_PEAK_WK__</span></div>
+      <div class="stat-row"><span class="stat-name">Peak long so far</span><span class="stat-val">__BER_PEAK_LONG__</span></div>
+      <div class="stat-row"><span class="stat-name">Avg weekly km</span><span class="stat-val">__BER_AVG__ (actual)</span></div>
+      <div class="stat-row"><span class="stat-name">Activities (W1-__BER_ACTUAL_N__)</span><span class="stat-val">__BER_ACT_COUNT__</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- CHARTS ROW 1 -->
+<div class="charts-grid">
+  <div class="chart-card">
+    <div class="chart-title">Weekly Running Volume (km)</div>
+    <canvas id="volumeChart"></canvas>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Long Run Progression (km)</div>
+    <canvas id="longRunChart"></canvas>
+  </div>
+</div>
+
+<!-- CUMULATIVE -->
+<div class="charts-grid">
+  <div class="chart-card full">
+    <div class="chart-title">Cumulative Running Volume (km)</div>
+    <canvas id="cumChart"></canvas>
+  </div>
+</div>
+
+<!-- PHASE + MIX -->
+<div class="charts-grid">
+  <div class="chart-card">
+    <div class="chart-title">Total km by Training Phase</div>
+    <canvas id="phaseChart"></canvas>
+    <p class="phase-note">Berlin phases are actual km only (W1–__BER_ACTUAL_N__ = BASE). BUILD/PEAK/TAPER planned km not shown.</p>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Avg Weekly km by Phase</div>
+    <canvas id="phaseAvgChart"></canvas>
+  </div>
+</div>
+
+<!-- ACTIVITY MIX -->
+<div class="mix-grid">
+  <div class="mix-card">
+    <div class="mix-title" style="color:var(--mtl)">Montreal 2022</div>
+    <div class="mix-sub">109 activities — full 26-week cycle</div>
+    <canvas id="mixMtl" style="max-height:160px"></canvas>
+    <div class="mix-legend">
+      <div class="mix-item"><div class="mix-swatch" style="background:#27ae60"></div> Easy (67)</div>
+      <div class="mix-item"><div class="mix-swatch" style="background:#f1c40f"></div> Tempo (19)</div>
+      <div class="mix-item"><div class="mix-swatch" style="background:#e74c3c"></div> Long (12)</div>
+      <div class="mix-item"><div class="mix-swatch" style="background:#ff6b6b"></div> Race (2)</div>
+      <div class="mix-item"><div class="mix-swatch" style="background:#3498db"></div> Bike (7)</div>
+      <div class="mix-item"><div class="mix-swatch" style="background:#9b59b6"></div> Weights (2)</div>
+    </div>
+  </div>
+  <div class="mix-card">
+    <div class="mix-title" style="color:var(--chi)">Chicago 2024</div>
+    <div class="mix-sub">73 activities — full 26-week cycle</div>
+    <canvas id="mixChi" style="max-height:160px"></canvas>
+    <div class="mix-legend">
+      <div class="mix-item"><div class="mix-swatch" style="background:#27ae60"></div> Easy (56)</div>
+      <div class="mix-item"><div class="mix-swatch" style="background:#f1c40f"></div> Tempo (7)</div>
+      <div class="mix-item"><div class="mix-swatch" style="background:#e74c3c"></div> Long (7)</div>
+      <div class="mix-item"><div class="mix-swatch" style="background:#ff6b6b"></div> Race (3)</div>
+      <div class="mix-item"><div class="mix-swatch" style="background:#3498db"></div> Bike (0)</div>
+      <div class="mix-item"><div class="mix-swatch" style="background:#9b59b6"></div> Weights (0)</div>
+    </div>
+  </div>
+  <div class="mix-card">
+    <div class="mix-title" style="color:var(--ber)">Berlin 2026</div>
+    <div class="mix-sub">__BER_ACT_COUNT__ activities — W1–__BER_ACTUAL_N__ actual only</div>
+    <canvas id="mixBer" style="max-height:160px"></canvas>
+    <div class="mix-legend">__BER_MIX_LEGEND__</div>
+  </div>
+</div>
+
+<!-- KEY INSIGHTS -->
+<div class="insights">
+  <h3>Key Insights</h3>
+  <div class="insight-grid">__INSIGHTS__</div>
+</div>
+
+<script>
+Chart.defaults.color = '#7a7d8e';
+Chart.defaults.borderColor = '#2a2d3a';
+Chart.defaults.font.family = "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
+Chart.defaults.font.size = 11;
+
+const WEEKS = Array.from({length:26}, (_,i) => 'W' + (i+1));
+const MTL_COL = '#9b59b6';
+const CHI_COL = '#e67e22';
+const BER_COL = '#e74c3c';
+const BER_ACTUAL_N = __BER_ACTUAL_N__; // weeks of actual Berlin data
+
+// Static reference cycles
+const MTL_KM = [59.91,46.78,31.47,34.93,11.07,10.75,21.99,22.97,25.37,29.52,33.2,34.57,39.79,39.89,40.56,43.2,49.84,53.56,51.7,43.34,61.93,55.8,64.34,52.04,35.56,57.06];
+const CHI_KM = [26.26,11.03,13.45,19.38,21.22,31.08,5.37,20.53,22.41,21.37,12.84,10.74,17.68,25.47,0,13.45,35.84,32.31,39.88,43.81,47.42,49.78,53.94,53.15,21.25,48.88];
+const MTL_LNG = [20.18,17.46,10.33,21.28,5.6,7.34,10.14,6.82,8.67,10.01,11.02,10.37,12.44,12.51,15.61,18.13,20.05,22.7,25.05,20.09,23.73,21.37,29.31,21.26,10.82,41.27];
+const CHI_LNG = [21.26,5.57,7.89,8.08,10.37,21.3,5.37,9.44,10.12,9.5,7.55,10.74,10.02,10.39,0,7.94,8.74,11.11,17.01,16.46,18.07,20.01,23.54,20.42,15.77,43.29];
+const MTL_CUM = [59.9,106.7,138.2,173.1,184.2,194.9,216.9,239.9,265.2,294.8,328.0,362.5,402.3,442.2,482.8,526.0,575.8,629.4,681.1,724.4,786.3,842.1,906.5,958.5,994.1,1051.1];
+const CHI_CUM = [26.3,37.3,50.7,70.1,91.3,122.4,127.8,148.3,170.7,192.1,204.9,215.7,233.4,258.8,258.8,272.3,308.1,340.4,380.3,424.1,471.5,521.3,575.3,628.4,649.7,698.5];
+
+// Berlin — derived from the live training log (injected by the app)
+const BER_KM  = __BER_KM__;
+const BER_LNG = __BER_LNG__;
+const BER_CUM = __BER_CUM__;
+
+// Split Berlin into actual vs planned
+function berActual(arr) { return arr.map((v,i) => i < BER_ACTUAL_N ? v : null); }
+function berPlanned(arr) { return arr.map((v,i) => i >= BER_ACTUAL_N - 1 ? v : null); }
+
+const chartOpts = (yLabel) => ({
+  responsive: true, maintainAspectRatio: true,
+  interaction: { mode: 'index', intersect: false },
+  plugins: {
+    legend: { display: false },
+    tooltip: { backgroundColor: '#1a1d27', borderColor: '#2a2d3a', borderWidth: 1,
+      callbacks: { label: ctx => ctx.parsed.y !== null ? ' ' + ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(1) + ' km' : null } }
+  },
+  scales: {
+    x: { grid: { color: '#1e2130' }, ticks: { maxTicksLimit: 13 } },
+    y: { grid: { color: '#1e2130' }, title: { display: true, text: yLabel } }
+  }
+});
+
+const phasePlugin = {
+  id: 'phaseZones',
+  beforeDraw(chart) {
+    const {ctx, chartArea:{top,bottom}, scales:{x}} = chart;
+    if (!x) return;
+    const zones = [{from:0,to:7,color:'rgba(52,152,219,0.05)'},{from:8,to:15,color:'rgba(46,204,113,0.05)'},{from:16,to:21,color:'rgba(231,76,60,0.05)'},{from:22,to:25,color:'rgba(241,196,15,0.05)'}];
+    zones.forEach(z => { const x0=x.getPixelForValue(z.from), x1=x.getPixelForValue(z.to); ctx.fillStyle=z.color; ctx.fillRect(x0, top, x1-x0, bottom-top); });
+  }
+};
+
+new Chart(document.getElementById('volumeChart'), {
+  type: 'line', plugins: [phasePlugin],
+  data: { labels: WEEKS, datasets: [
+    { label:'Montreal 2022', data: MTL_KM, borderColor: MTL_COL, borderWidth: 2, pointRadius: 2, fill: false, tension: 0.3 },
+    { label:'Chicago 2024',  data: CHI_KM, borderColor: CHI_COL, borderWidth: 2, pointRadius: 2, fill: false, tension: 0.3 },
+    { label:'Berlin 2026 (actual)',  data: berActual(BER_KM), borderColor: BER_COL, borderWidth: 2.5, pointRadius: 2.5, fill: false, tension: 0.3 },
+    { label:'Berlin 2026 (planned)', data: berPlanned(BER_KM), borderColor: BER_COL, borderDash:[5,4], borderWidth: 1.5, pointRadius: 1.5, fill: false, tension: 0.3 },
+  ] },
+  options: chartOpts('km')
+});
+
+new Chart(document.getElementById('longRunChart'), {
+  type: 'line', plugins: [phasePlugin],
+  data: { labels: WEEKS, datasets: [
+    { label:'Montreal 2022', data: MTL_LNG, borderColor: MTL_COL, borderWidth: 2, pointRadius: 2, fill: false, tension: 0.3 },
+    { label:'Chicago 2024',  data: CHI_LNG, borderColor: CHI_COL, borderWidth: 2, pointRadius: 2, fill: false, tension: 0.3 },
+    { label:'Berlin 2026 (actual)',  data: berActual(BER_LNG), borderColor: BER_COL, borderWidth: 2.5, pointRadius: 2.5, fill: false, tension: 0.3 },
+    { label:'Berlin 2026 (planned)', data: berPlanned(BER_LNG), borderColor: BER_COL, borderDash:[5,4], borderWidth: 1.5, pointRadius: 1.5, fill: false, tension: 0.3 },
+  ] },
+  options: chartOpts('km')
+});
+
+new Chart(document.getElementById('cumChart'), {
+  type: 'line', plugins: [phasePlugin],
+  data: { labels: WEEKS, datasets: [
+    { label:'Montreal 2022', data: MTL_CUM, borderColor: MTL_COL, backgroundColor:'rgba(155,89,182,0.06)', borderWidth: 2, pointRadius: 1.5, fill: true, tension: 0.3 },
+    { label:'Chicago 2024',  data: CHI_CUM, borderColor: CHI_COL, backgroundColor:'rgba(230,126,34,0.06)', borderWidth: 2, pointRadius: 1.5, fill: true, tension: 0.3 },
+    { label:'Berlin 2026 (actual)',  data: berActual(BER_CUM), borderColor: BER_COL, backgroundColor:'rgba(231,76,60,0.06)', borderWidth: 2.5, pointRadius: 2, fill: true, tension: 0.3 },
+    { label:'Berlin 2026 (planned)', data: berPlanned(BER_CUM), borderColor: BER_COL, borderDash:[5,4], borderWidth: 1.5, pointRadius: 1, fill: false, tension: 0.3 },
+  ] },
+  options: chartOpts('km')
+});
+
+const phaseLabels = ['BASE (W1–8)', 'BUILD (W9–16)', 'PEAK (W17–22)', 'TAPER (W23–26)'];
+const MTL_PHASE = [239.9, 286.1, 316.2, 209.0];
+const CHI_PHASE = [148.3, 124.0, 249.0, 177.2];
+// Berlin actual km grouped into the 4 phase buckets (planned weeks contribute 0)
+const BER_PHASE = __BER_PHASE__;
+
+new Chart(document.getElementById('phaseChart'), {
+  type: 'bar',
+  data: { labels: phaseLabels, datasets: [
+    { label:'Montreal 2022', data: MTL_PHASE, backgroundColor: 'rgba(155,89,182,0.7)', borderColor: MTL_COL, borderWidth: 1, borderRadius: 4 },
+    { label:'Chicago 2024',  data: CHI_PHASE, backgroundColor: 'rgba(230,126,34,0.7)', borderColor: CHI_COL, borderWidth: 1, borderRadius: 4 },
+    { label:'Berlin 2026',   data: BER_PHASE, backgroundColor: 'rgba(231,76,60,0.7)', borderColor: BER_COL, borderWidth: 1, borderRadius: 4 },
+  ] },
+  options: { responsive: true, maintainAspectRatio: true,
+    plugins: { legend: { display: true, position:'top', labels:{boxWidth:10,padding:12} }, tooltip:{ backgroundColor:'#1a1d27',borderColor:'#2a2d3a',borderWidth:1 } },
+    scales: { x:{grid:{color:'#1e2130'}}, y:{grid:{color:'#1e2130'},title:{display:true,text:'km'}} } }
+});
+
+const phaseWeeks = [8, 8, 6, 4];
+const MTL_PHASE_AVG = MTL_PHASE.map((v,i) => +(v/phaseWeeks[i]).toFixed(1));
+const CHI_PHASE_AVG = CHI_PHASE.map((v,i) => +(v/phaseWeeks[i]).toFixed(1));
+const BER_PHASE_AVG = __BER_PHASE_AVG__;
+
+new Chart(document.getElementById('phaseAvgChart'), {
+  type: 'bar',
+  data: { labels: phaseLabels, datasets: [
+    { label:'Montreal 2022', data: MTL_PHASE_AVG, backgroundColor:'rgba(155,89,182,0.7)', borderColor:MTL_COL, borderWidth:1, borderRadius:4 },
+    { label:'Chicago 2024',  data: CHI_PHASE_AVG, backgroundColor:'rgba(230,126,34,0.7)', borderColor:CHI_COL, borderWidth:1, borderRadius:4 },
+    { label:'Berlin 2026',   data: BER_PHASE_AVG, backgroundColor:'rgba(231,76,60,0.7)', borderColor:BER_COL, borderWidth:1, borderRadius:4 },
+  ] },
+  options: { responsive: true, maintainAspectRatio: true,
+    plugins: { legend:{display:true,position:'top',labels:{boxWidth:10,padding:12}}, tooltip:{backgroundColor:'#1a1d27',borderColor:'#2a2d3a',borderWidth:1} },
+    scales: { x:{grid:{color:'#1e2130'}}, y:{grid:{color:'#1e2130'},title:{display:true,text:'km/week'}} } }
+});
+
+const MIX_COLORS = ['#27ae60','#f1c40f','#e74c3c','#ff6b6b','#3498db','#9b59b6'];
+function donut(id, data) {
+  new Chart(document.getElementById(id), {
+    type: 'doughnut',
+    data: { labels: ['Easy','Tempo','Long','Race','Bike','Weights'],
+      datasets: [{ data, backgroundColor: MIX_COLORS, borderWidth: 0, hoverOffset: 4 }] },
+    options: { responsive: true, maintainAspectRatio: true, cutout: '65%',
+      plugins: { legend: { display: false },
+        tooltip: { backgroundColor:'#1a1d27', borderColor:'#2a2d3a', borderWidth:1,
+          callbacks: { label: ctx => ' ' + ctx.label + ': ' + ctx.raw + ' (' + Math.round(ctx.raw/ctx.dataset.data.reduce((a,b)=>a+b,0)*100) + '%)' } } } }
+  });
+}
+donut('mixMtl', [67,19,12,2,7,2]);
+donut('mixChi', [56,7,7,3,0,0]);
+donut('mixBer', __BER_MIX__);
+</script>
+</body>
+</html>
