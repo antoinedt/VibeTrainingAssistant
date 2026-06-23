@@ -9,8 +9,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** OAuth redirect target — must match the intent filter in AndroidManifest.xml
- *  and the Authorization Callback Domain (`vibetraining`) in the Strava app. */
-const val STRAVA_REDIRECT_URI = "vibe://vibetraining"
+ *  and the Authorization Callback Domain (`strava-auth`) in the Strava app. */
+const val STRAVA_REDIRECT_URI = "vibe://strava-auth"
 private const val STRAVA_SCOPE = "activity:read_all"
 private const val TOKEN_URL = "https://www.strava.com/oauth/token"
 private const val ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
