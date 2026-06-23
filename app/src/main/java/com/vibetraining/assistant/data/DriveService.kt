@@ -120,4 +120,20 @@ class DriveService(private val context: Context) {
         }
 
     fun isSignedIn(): Boolean = GoogleSignIn.getLastSignedInAccount(context) != null
+
+    /** Raw `training_data.js` from Drive, for diffing newly-synced activities. */
+    suspend fun downloadTrainingDataText(): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val drive = buildDrive() ?: error("Not signed in to Google")
+            downloadText(drive, TRAINING_DATA_NAME)
+        }
+    }
+
+    /** Writes the reconciled `training_data.js` back to the Drive folder. */
+    suspend fun saveTrainingDataText(text: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val drive = buildDrive() ?: error("Not signed in to Google")
+            uploadText(drive, TRAINING_DATA_NAME, text, "text/javascript")
+        }
+    }
 }
