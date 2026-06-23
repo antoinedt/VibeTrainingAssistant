@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Berlin 2026 — Training Log</title>
+<style>
+  :root {
+    --bg:#0f1117; --card:#1a1d27; --border:#2a2d3e; --text:#e8eaf0;
+    --sub:#8b92a9; --easy:#4caf76; --tempo:#f0c040; --long:#e05c5c;
+    --race:#ffd700; --bike:#4a9eff; --wt:#b07fdb; --rest:#505570;
+    --plan-alpha:0.45; --peak:#ff8c42;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;min-height:100vh;padding:0 0 60px;}
+
+  .hdr{background:linear-gradient(135deg,#1e0a2e,#0d1a3a);padding:24px 28px;border-bottom:2px solid #3a2060;}
+  .hdr h1{font-size:1.7rem;font-weight:800;letter-spacing:-0.5px;}
+  .hdr h1 span{color:#e05c5c;}
+  .hdr-sub{color:var(--sub);margin-top:4px;font-size:.9rem;}
+
+  .top-bar{display:flex;flex-wrap:wrap;gap:14px;padding:16px 28px;background:#13151f;border-bottom:1px solid var(--border);align-items:center;}
+  .leg{display:flex;gap:6px;align-items:center;font-size:.8rem;color:var(--sub);}
+  .dot{width:10px;height:10px;border-radius:50%;}
+  .countdown{font-size:.85rem;color:#ff8c42;font-weight:700;padding:3px 10px;background:#2a1a00;border-radius:8px;margin-left:auto;}
+
+  .charts{padding:22px 28px;display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+  @media(max-width:900px){.charts{grid-template-columns:1fr;}}
+  .chart-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;}
+  .chart-title{font-size:.82rem;font-weight:700;color:var(--sub);text-transform:uppercase;letter-spacing:.7px;margin-bottom:14px;}
+  .bars{display:flex;align-items:flex-end;height:120px;gap:3px;}
+  .bar-w{display:flex;flex-direction:column;align-items:center;flex:1;height:100%;justify-content:flex-end;position:relative;cursor:pointer;}
+  .bar-w:hover .bar-tip{opacity:1;}
+  .bar{border-radius:3px 3px 0 0;width:100%;min-height:2px;transition:opacity .2s;}
+  .bar-lbl{font-size:.55rem;color:var(--sub);margin-top:3px;text-align:center;}
+  .bar-tip{position:absolute;bottom:calc(100% + 4px);left:50%;transform:translateX(-50%);background:#2a2d3e;border:1px solid var(--border);border-radius:5px;padding:4px 7px;font-size:.7rem;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s;z-index:5;}
+
+  .prog-bar-wrap{padding:4px 28px 0;}
+  .prog-bar{height:4px;background:#1a1d27;border-radius:4px;overflow:hidden;margin-bottom:22px;}
+  .prog-bar-fill{height:100%;background:linear-gradient(90deg,#4caf76,#f0c040,#e05c5c);border-radius:4px;transition:width .5s;}
+
+  .weeks{padding:0 28px;display:flex;flex-direction:column;gap:12px;}
+  .week-card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:border-color .2s;}
+  .week-card.current-week{border-color:#4a9eff;box-shadow:0 0 0 1px rgba(74,158,255,.25);}
+  .week-card:hover{border-color:#3a3d5a;}
+
+  .week-hdr{display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;user-select:none;}
+  .week-hdr:hover{background:rgba(255,255,255,.03);}
+  .w-num{background:#2a2d3e;border-radius:6px;padding:2px 8px;font-size:.78rem;font-weight:700;color:var(--sub);min-width:34px;text-align:center;}
+  .w-dates{font-size:.82rem;color:var(--sub);min-width:100px;}
+  .w-phase{font-size:.7rem;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:10px;background:#1a2040;color:#4a9eff;}
+  .phase-label-BUILD{background:#2a1a3a;color:#b07fdb;}
+  .phase-label-PEAK{background:#3a1a0a;color:#ff8c42;}
+  .phase-label-TAPER{background:#1a2a1a;color:#4caf76;}
+  .phase-label-RACE{background:#2a1a1a;color:#ffd700;}
+  .w-km{font-weight:700;font-size:.92rem;}
+  .w-badges{display:flex;gap:6px;margin-left:auto;align-items:center;}
+  .w-badge-status{font-size:.7rem;padding:2px 7px;border-radius:8px;}
+  .badge-actual{background:#1a2a1a;color:#4caf76;}
+  .badge-current{background:#1a2a40;color:#4a9eff;animation:pulse-badge 2s infinite;}
+  .badge-planned{background:#2a2a2a;color:#8b92a9;}
+  @keyframes pulse-badge{0%,100%{opacity:1;}50%{opacity:.5;}}
+  .chevron{color:var(--sub);font-size:1rem;transition:transform .2s;margin-left:4px;}
+  .chevron.open{transform:rotate(180deg);}
+
+  .week-body{display:none;padding:12px 16px;padding-top:0;border-top:1px solid var(--border);}
+  .week-body.open{display:block;}
+  .acts{display:flex;flex-direction:column;gap:6px;margin-top:12px;}
+
+  .act{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;background:#12151f;cursor:pointer;transition:background .15s;border:1px solid transparent;}
+  .act:hover{background:#1e2235;border-color:#2a2d4a;}
+  .act.pending{opacity:.5;border:1px dashed #2a2d4a;background:#0f1118;}
+  .act.pending:hover{opacity:.8;background:#13162a;}
+  .act-d{font-size:.75rem;color:var(--sub);min-width:64px;font-family:monospace;}
+  .act-ic{font-size:1rem;min-width:22px;text-align:center;}
+  .act-nm{font-size:.85rem;font-weight:600;flex:1;}
+  .act-nm.easy{color:var(--easy);}
+  .act-nm.tempo{color:var(--tempo);}
+  .act-nm.long{color:var(--long);}
+  .act-nm.race-r{color:var(--race);}
+  .act-nm.bike{color:var(--bike);}
+  .act-nm.wt{color:var(--wt);}
+  .act-nm.rest-c{color:var(--rest);}
+  .act-r{font-size:.78rem;color:var(--sub);white-space:nowrap;}
+  .act-flag{font-size:.65rem;padding:1px 5px;border-radius:5px;font-weight:700;margin-left:4px;}
+  .flag-race{background:#3a2a00;color:#ffd700;}
+  .flag-pr{background:#2a0030;color:#cc88ff;}
+  .flag-key{background:#2a1a00;color:#ff8c42;}
+  .flag-1st{background:#1a2a00;color:#88ff44;}
+
+  .week-card.planned-week{border-color:#1a1d2e;background:#13151e;}
+  .week-card.planned-week .week-hdr{opacity:.6;}
+  .week-divider{display:flex;align-items:center;gap:12px;margin:16px 0 4px;color:#3a3d5a;font-size:.72rem;font-weight:700;letter-spacing:.8px;text-transform:uppercase;padding:0 28px;}
+  .week-divider::before,.week-divider::after{content:'';flex:1;height:1px;background:#1e2035;}
+
+  .empty-week{color:var(--sub);font-size:.82rem;font-style:italic;padding:6px 0;}
+
+  /* POPUP */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:none;backdrop-filter:blur(3px);}
+  .overlay.open{display:flex;align-items:center;justify-content:center;}
+  .popup{background:#1a1d27;border:1px solid #3a3d5a;border-radius:16px;padding:28px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto;position:relative;}
+  .p-tag{font-size:.72rem;font-weight:700;letter-spacing:.7px;text-transform:uppercase;padding:3px 9px;border-radius:10px;display:inline-block;margin-bottom:12px;}
+  .p-name{font-size:1.2rem;font-weight:800;margin-bottom:6px;}
+  .p-meta{font-size:.82rem;color:var(--sub);margin-bottom:16px;}
+  .p-desc{font-size:.88rem;line-height:1.65;color:#c8cad8;white-space:pre-line;}
+  .p-desc:empty{display:none;}
+  .p-stats{margin-top:16px;display:flex;gap:16px;flex-wrap:wrap;}
+  .p-stat{background:#12151f;border-radius:8px;padding:8px 14px;text-align:center;}
+  .p-stat-v{font-size:1.1rem;font-weight:700;}
+  .p-stat-l{font-size:.7rem;color:var(--sub);margin-top:2px;}
+  .p-notes{display:none;margin-top:16px;padding:11px 14px;background:#0d1020;border-left:3px solid #4a9eff;border-radius:0 8px 8px 0;}
+  .p-notes-label{font-size:.67rem;font-weight:700;letter-spacing:.7px;color:#4a9eff;text-transform:uppercase;margin-bottom:5px;}
+  .p-notes-body{font-size:.83rem;line-height:1.65;color:#a8c0e8;white-space:pre-line;}
+  .p-close{position:absolute;top:14px;right:16px;background:none;border:none;color:var(--sub);font-size:1.5rem;cursor:pointer;line-height:1;}
+  .p-close:hover{color:var(--text);}
+</style>
+</head>
+<body>
+
+<!-- Training data is injected here by the app (replaces the placeholder below). -->
+<script>/*__TRAINING_DATA__*/</script>
+
+<div class="hdr">
+  <h1>Berlin Marathon 2026 <span>🏁</span></h1>
+  <div class="hdr-sub">26-week training log &nbsp;·&nbsp; Race day: Sunday, September 27, 2026</div>
+</div>
+
+<div class="top-bar">
+  <div class="leg"><div class="dot" style="background:var(--easy)"></div>Easy</div>
+  <div class="leg"><div class="dot" style="background:var(--tempo)"></div>Tempo / Quality</div>
+  <div class="leg"><div class="dot" style="background:var(--long)"></div>Long</div>
+  <div class="leg"><div class="dot" style="background:var(--race)"></div>Race</div>
+  <div class="leg"><div class="dot" style="background:var(--bike)"></div>Zwift</div>
+  <div class="leg"><div class="dot" style="background:var(--wt)"></div>Weights</div>
+  <div id="countdown"></div>
+</div>
+
+<div class="charts">
+  <div class="chart-card">
+    <div class="chart-title">Weekly Running Volume (km)</div>
+    <div class="bars" id="volChart"></div>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Long Run Progression (km)</div>
+    <div class="bars" id="longChart"></div>
+  </div>
+</div>
+
+<div class="prog-bar-wrap">
+  <div class="prog-bar"><div class="prog-bar-fill" id="progFill"></div></div>
+</div>
+
+<div class="weeks" id="weeksContainer"></div>
+
+<!-- POPUP -->
+<div class="overlay" id="popup" onclick="closePopup(event)">
+  <div class="popup" onclick="event.stopPropagation()">
+    <button class="p-close" onclick="closePopup()">&#x00D7;</button>
+    <div class="p-tag" id="p-tag"></div>
+    <div class="p-name" id="p-name"></div>
+    <div class="p-meta" id="p-meta"></div>
+    <div class="p-desc" id="p-desc"></div>
+    <div class="p-stats" id="p-stats"></div>
+    <div class="p-notes" id="p-notes">
+      <div class="p-notes-label">Coach Notes</div>
+      <div class="p-notes-body" id="p-notes-body"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Defensive: if the data failed to inject, surface it rather than rendering blank. */
+if (typeof WEEKS === 'undefined') { window.WEEKS = []; }
+
+var TYPE_COLOR={easy:'var(--easy)',tempo:'var(--tempo)',long:'var(--long)','race-r':'var(--race)',bike:'var(--bike)',wt:'var(--wt)','rest-c':'var(--rest)'};
+var TYPE_LABEL={easy:'Easy Run',tempo:'Quality Run',long:'Long Run','race-r':'Race',bike:'Bike / Zwift',wt:'Strength','rest-c':'Rest'};
+var DAY_ORD={Mon:0,Tue:1,Wed:2,Thu:3,Fri:4,Sat:5,Sun:6};
+
+/* Popup registry — each rendered activity gets a numeric index. */
+var ACT_DATA=[];
+
+var RACE_DATE=new Date('2026-09-27T00:00:00');
+
+function statusOf(w){
+  if(w.status==='actual'||w.status==='current'||w.status==='planned') return w.status;
+  /* Fall back to a date-derived status when not explicitly set. */
+  var today=new Date(); today.setHours(0,0,0,0);
+  var msW=7*24*3600*1000;
+  var we=new Date(RACE_DATE.getTime()-(26-w.n)*msW);
+  var ws=new Date(we.getTime()-6*msW/7);
+  if(we<today) return 'actual';
+  if(ws<=today) return 'current';
+  return 'planned';
+}
+
+/* COUNTDOWN */
+(function(){
+  var d=Math.ceil((RACE_DATE-new Date())/864e5);
+  var el=document.getElementById('countdown');
+  if(d>0) el.innerHTML='<span class="countdown">🏁 '+d+' days to Berlin</span>';
+  else if(d===0) el.innerHTML='<span class="countdown" style="color:#ffd700">🏁 RACE DAY!</span>';
+})();
+
+/* PROGRESS BAR */
+(function(){
+  var done=WEEKS.filter(function(w){return statusOf(w)==='actual';}).length;
+  document.getElementById('progFill').style.width=Math.round(done/26*100)+'%';
+})();
+
+/* CHARTS */
+function buildChart(id, getVal, colorFn){
+  var vals=WEEKS.map(getVal);
+  var max=Math.max.apply(null, vals.filter(function(v){return v>0;}).concat([1]));
+  var c=document.getElementById(id);
+  c.innerHTML='';
+  vals.forEach(function(v,i){
+    var w=WEEKS[i];
+    var pct=v>0?Math.max(v/max*100,3):0;
+    var isPlan=statusOf(w)==='planned';
+    var div=document.createElement('div');
+    div.className='bar-w';
+    var label=v>0?((typeof v==='number'?v.toFixed(1):v)+' km'):'—';
+    div.innerHTML='<div class="bar-tip">W'+w.n+': '+label+'</div>'
+      +'<div class="bar" style="height:'+pct+'%;background:'+colorFn(w)+';opacity:'+(isPlan?0.45:1)+'"></div>'
+      +'<div class="bar-lbl">'+w.n+'</div>';
+    c.appendChild(div);
+  });
+}
+buildChart('volChart',
+  function(w){return w.runKm||0;},
+  function(w){
+    if(w.phase==='PEAK') return 'var(--peak)';
+    if(w.phase==='TAPER') return 'var(--easy)';
+    if(w.phase==='RACE') return 'var(--race)';
+    if(w.phase==='BUILD') return 'var(--wt)';
+    return 'var(--bike)';
+  }
+);
+buildChart('longChart',
+  function(w){return w.longKm||0;},
+  function(){return 'var(--long)';}
+);
+
+/* ACTIVITY + WEEK RENDERING */
+function flagHtml(flags){
+  if(!flags||!flags.length) return '';
+  return flags.map(function(f){
+    if(f==='race') return '<span class="act-flag flag-race">RACE</span>';
+    if(f==='key')  return '<span class="act-flag flag-key">KEY</span>';
+    if(f.indexOf('PR')>-1) return '<span class="act-flag flag-pr">'+f+'</span>';
+    if(f.indexOf('AG')>-1||f.indexOf('1st')>-1) return '<span class="act-flag flag-1st">'+f+'</span>';
+    return '<span class="act-flag">'+f+'</span>';
+  }).join('');
+}
+
+function actHtml(a, w){
+  var idx=ACT_DATA.length;
+  var pending=a.pending||statusOf(w)==='planned';
+  ACT_DATA.push({a:a, wn:w.n, pending:pending});
+  var flags=flagHtml(a.flags);
+  var km=a.km?'<span style="font-weight:700;color:var(--text)">'+(typeof a.km==='number'?a.km.toFixed(1):a.km)+' km</span> ':'';
+  var sub=a.sub?'<span>'+a.sub+'</span>':'';
+  return '<div class="act'+(pending?' pending':'')+'" onclick="openPopup('+idx+')">'
+    +'<span class="act-d">'+(a.d||'')+'</span>'
+    +'<span class="act-ic">'+(a.ic||'')+'</span>'
+    +'<span class="act-nm '+(a.cls||'')+'">'+(a.nm||'')+flags+'</span>'
+    +'<div class="act-r">'+km+sub+'</div>'
+    +'</div>';
+}
+
+function weekStatusBadge(s){
+  if(s==='actual')  return '<span class="w-badge-status badge-actual">&#x2713; Done</span>';
+  if(s==='current') return '<span class="w-badge-status badge-current">&#x25CF; Now</span>';
+  return '<span class="w-badge-status badge-planned">Planned</span>';
+}
+function phaseLabel(p){return '<span class="w-phase phase-label-'+p+'">'+p+'</span>';}
+
+var container=document.getElementById('weeksContainer');
+var dividerInserted=false;
+WEEKS.forEach(function(w, wi){
+  var status=statusOf(w);
+  var isCurrent=status==='current';
+  var isPlanned=status==='planned';
+
+  if(isPlanned && !dividerInserted){
+    dividerInserted=true;
+    var dv=document.createElement('div');
+    dv.className='week-divider';
+    dv.innerHTML='Upcoming weeks';
+    container.appendChild(dv);
+  }
+
+  var sortedActs=(w.acts||[]).slice().sort(function(a,b){return (DAY_ORD[(a.d||'').slice(0,3)]||0)-(DAY_ORD[(b.d||'').slice(0,3)]||0);});
+  var actsHtml=sortedActs.map(function(a){return actHtml(a,w);}).join('');
+  var km=w.runKm?((typeof w.runKm==='number'?w.runKm.toFixed(1):w.runKm)+' km'):'—';
+
+  var card=document.createElement('div');
+  card.className='week-card'+(isCurrent?' current-week':isPlanned?' planned-week':'');
+  card.id='week-'+w.n;
+  card.innerHTML=
+    '<div class="week-hdr" onclick="toggleWeek('+wi+')">'
+      +'<div class="w-num">W'+w.n+'</div>'
+      +'<div class="w-dates">'+(w.dates||'')+'</div>'
+      +phaseLabel(w.phase||'BASE')
+      +'<div class="w-km">'+km+'</div>'
+      +'<div class="w-badges">'+weekStatusBadge(status)
+        +'<span class="chevron'+(isCurrent?' open':'')+'" id="chev-'+wi+'">&#x25BE;</span>'
+      +'</div>'
+    +'</div>'
+    +'<div class="week-body'+(isCurrent?' open':'')+'" id="wb-'+wi+'">'
+      +'<div class="acts">'+(actsHtml||'<div class="empty-week">No activities logged yet.</div>')+'</div>'
+    +'</div>';
+  container.appendChild(card);
+});
+
+function toggleWeek(i){
+  var b=document.getElementById('wb-'+i);
+  var c=document.getElementById('chev-'+i);
+  if(b.classList.contains('open')){b.classList.remove('open');c.classList.remove('open');}
+  else{b.classList.add('open');c.classList.add('open');}
+}
+
+/* POPUP */
+function openPopup(idx){
+  var entry=ACT_DATA[idx];
+  if(!entry) return;
+  var a=entry.a, wn=entry.wn, pending=entry.pending;
+  var color=TYPE_COLOR[a.cls]||'#8b92a9';
+  var label=TYPE_LABEL[a.cls]||a.cls||'Activity';
+
+  var tagEl=document.getElementById('p-tag');
+  tagEl.textContent=label;
+  tagEl.style.cssText='background:'+color+'22;color:'+color+';border:1px solid '+color+'44';
+
+  var nameEl=document.getElementById('p-name');
+  nameEl.textContent=a.nm||'Activity';
+  nameEl.style.color=color;
+
+  var parts=[];
+  if(a.d) parts.push(a.d);
+  if(wn) parts.push('Week '+wn);
+  if(pending) parts.push('Planned');
+  document.getElementById('p-meta').textContent=parts.join(' · ');
+
+  /* Full description — the part that was previously missing. */
+  document.getElementById('p-desc').textContent=a.desc||'';
+
+  var notesEl=document.getElementById('p-notes');
+  var notesTxt=a.notes||'';
+  if(notesTxt){
+    document.getElementById('p-notes-body').textContent=notesTxt;
+    notesEl.style.display='block';
+  } else {
+    notesEl.style.display='none';
+  }
+
+  var stats=[];
+  if(a.km) stats.push({v:(typeof a.km==='number'?a.km.toFixed(1):a.km)+' km', l:pending?'Target':'Distance'});
+  if(a.sub && !pending) stats.push({v:a.sub, l:'Avg Pace'});
+  var extra=(a.flags||[]).filter(function(f){return f!=='key'&&f!=='race';});
+  if(extra.length) stats.push({v:extra.join(', '), l:'Highlights'});
+  document.getElementById('p-stats').innerHTML=stats.map(function(s){
+    return '<div class="p-stat"><div class="p-stat-v">'+s.v+'</div><div class="p-stat-l">'+s.l+'</div></div>';
+  }).join('');
+
+  document.getElementById('popup').classList.add('open');
+}
+
+function closePopup(e){
+  if(!e || e.target===document.getElementById('popup'))
+    document.getElementById('popup').classList.remove('open');
+}
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape') document.getElementById('popup').classList.remove('open');
+});
+
+/* Scroll the current week into view. */
+setTimeout(function(){
+  var cur=WEEKS.findIndex(function(w){return statusOf(w)==='current';});
+  if(cur>=0){
+    var el=document.getElementById('week-'+WEEKS[cur].n);
+    if(el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'center'});
+  }
+},300);
+</script>
+</body>
+</html>

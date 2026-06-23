@@ -11,8 +11,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private const val DRIVE_FOLDER_ID = "16tc_gd-7k8kuBN-QjLuqfIUQ4SrGkGPs"
-private const val TRAINING_HTML_NAME = "berlin_training_log.html"
 private const val COMPARE_HTML_NAME = "training_comparison.html"
+private const val TRAINING_DATA_NAME = "training_data.js"
+
+// Bundled presentation template; the app owns the rendering so the popup and
+// charts are guaranteed correct regardless of what HTML lives in Drive.
+private const val TRAINING_LOG_ASSET = "training_log.html"
+private const val TRAINING_DATA_PLACEHOLDER = "/*__TRAINING_DATA__*/"
 
 // Matches <script src="..."></script> tags so relatively-referenced companion
 // files can be inlined. Absolute (http/https/protocol-relative) srcs are kept.
@@ -74,8 +79,27 @@ class DriveService(private val context: Context) {
             }
         }
 
-    suspend fun fetchTrainingHtml(): Result<String> = fetchHtmlContent(TRAINING_HTML_NAME)
     suspend fun fetchCompareHtml(): Result<String> = fetchHtmlContent(COMPARE_HTML_NAME)
+
+    /**
+     * Renders the Training Log from the app's own bundled template, injecting
+     * the live `training_data.js` downloaded from Drive. This replaces loading
+     * the externally-generated HTML so the activity popup reliably shows each
+     * activity's full description.
+     */
+    suspend fun fetchTrainingHtml(): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val drive = buildDrive() ?: error("Not signed in to Google")
+            val dataJs = downloadText(drive, TRAINING_DATA_NAME)
+            val template = context.assets.open(TRAINING_LOG_ASSET).bufferedReader().use { it.readText() }
+            if (!template.contains(TRAINING_DATA_PLACEHOLDER)) {
+                error("Training Log template is missing its data placeholder")
+            }
+            // Kotlin's String.replace(String, String) is a literal replacement,
+            // so '$' or '\' in the data are inserted verbatim.
+            template.replace(TRAINING_DATA_PLACEHOLDER, dataJs)
+        }
+    }
 
     fun isSignedIn(): Boolean = GoogleSignIn.getLastSignedInAccount(context) != null
 }
