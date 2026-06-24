@@ -33,10 +33,16 @@ fun SettingsScreen(onBack: () -> Unit) {
     var clientSecret by remember(prefs.stravaClientSecret) { mutableStateOf(prefs.stravaClientSecret) }
     var secretVisible by remember { mutableStateOf(false) }
 
+    var coachUrl by remember(prefs.coachFireUrl) { mutableStateOf(prefs.coachFireUrl) }
+    var coachToken by remember(prefs.coachFireToken) { mutableStateOf(prefs.coachFireToken) }
+    var coachTokenVisible by remember { mutableStateOf(false) }
+
     // Only enable Save when the fields differ from what's already stored, so an
     // unchanged form leaves the button greyed out and inert.
     val hasChanges = clientId.trim() != prefs.stravaClientId ||
         clientSecret.trim() != prefs.stravaClientSecret
+    val coachChanged = coachUrl.trim() != prefs.coachFireUrl ||
+        coachToken.trim() != prefs.coachFireToken
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHost) },
@@ -120,6 +126,59 @@ fun SettingsScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text(
+                text = "Coach Review",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = "Create a routine at claude.ai/code/routines with an API trigger, then " +
+                    "paste its /fire URL and token here. The Coach Review button uses them to " +
+                    "start an analysis on demand.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            OutlinedTextField(
+                value = coachUrl,
+                onValueChange = { coachUrl = it },
+                label = { Text("Routine /fire URL") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = coachToken,
+                onValueChange = { coachToken = it },
+                label = { Text("Routine token") },
+                singleLine = true,
+                visualTransformation = if (coachTokenVisible) VisualTransformation.None
+                                       else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    TextButton(onClick = { coachTokenVisible = !coachTokenVisible }) {
+                        Text(if (coachTokenVisible) "Hide" else "Show")
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Button(
+                onClick = {
+                    scope.launch {
+                        prefsManager.saveCoachTrigger(coachUrl.trim(), coachToken.trim())
+                        snackbarHost.showSnackbar("Saved")
+                    }
+                },
+                enabled = coachChanged,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Save")
+            }
         }
     }
 }
