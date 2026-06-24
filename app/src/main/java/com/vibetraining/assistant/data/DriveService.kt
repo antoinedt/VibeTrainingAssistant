@@ -204,22 +204,31 @@ class DriveService(private val context: Context) {
     }
 
     /**
-     * Fires the coaching Routine on demand. Reads `routine_trigger.json`
-     * ({"url","token","text"?}) from the Drive folder and POSTs to the routine's
-     * /fire endpoint, returning the new session URL (or "started"). Keeping the
-     * URL+token in Drive — not the APK — means the secret never ships in the
-     * binary and can be changed by editing one file.
+     * Fires the coaching Routine on demand by POSTing to its /fire endpoint,
+     * returning the new session URL (or "started"). The URL+token come from the
+     * app Settings; if either is blank, falls back to a `routine_trigger.json`
+     * ({"url","token","text"?}) in the Drive folder. Either way the bearer token
+     * lives outside the APK and can be changed without a rebuild.
      */
-    suspend fun triggerCoaching(): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            val drive = buildDrive() ?: error("Not signed in to Google")
-            val config = org.json.JSONObject(downloadText(drive, ROUTINE_TRIGGER_NAME))
-            val url = config.optString("url").ifBlank { error("routine_trigger.json is missing \"url\"") }
-            val token = config.optString("token").ifBlank { error("routine_trigger.json is missing \"token\"") }
-            val text = config.optString("text").ifBlank { "Run the coaching review now." }
-            postFire(url, token, text)
+    suspend fun triggerCoaching(url: String = "", token: String = ""): Result<String> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                var u = url.trim()
+                var t = token.trim()
+                var text = ""
+                if (u.isBlank() || t.isBlank()) {
+                    // Fall back to the Drive-hosted config for anything not supplied.
+                    val drive = buildDrive() ?: error("Not signed in to Google")
+                    val config = org.json.JSONObject(downloadText(drive, ROUTINE_TRIGGER_NAME))
+                    if (u.isBlank()) u = config.optString("url").trim()
+                    if (t.isBlank()) t = config.optString("token").trim()
+                    text = config.optString("text").trim()
+                }
+                if (u.isBlank()) error("No routine URL set — add it in Settings.")
+                if (t.isBlank()) error("No routine token set — add it in Settings.")
+                postFire(u, t, text.ifBlank { "Run the coaching review now." })
+            }
         }
-    }
 
     private fun postFire(url: String, token: String, text: String): String {
         val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {

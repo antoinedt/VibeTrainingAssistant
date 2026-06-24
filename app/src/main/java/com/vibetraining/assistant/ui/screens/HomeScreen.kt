@@ -138,7 +138,7 @@ fun HomeScreen(
         scope.launch {
             try {
                 syncState = SyncState.Loading("Asking the coach to review…")
-                driveService.triggerCoaching().getOrThrow()
+                driveService.triggerCoaching(prefs.coachFireUrl, prefs.coachFireToken).getOrThrow()
                 syncState = SyncState.Success(
                     "Coach review started. New ratings will appear in your Training Log shortly."
                 )
@@ -220,9 +220,15 @@ fun HomeScreen(
         ensureSignIn { runSync() }
     }
 
-    // Coaching only needs Drive (to read the routine trigger config), so no
-    // Strava credentials gate here.
-    fun startCoaching() = ensureSignIn { runCoaching() }
+    // With the routine URL+token in Settings, coaching needs no Google sign-in;
+    // only the Drive-config fallback path does, so gate on that.
+    fun startCoaching() {
+        if (prefs.coachFireUrl.isNotBlank() && prefs.coachFireToken.isNotBlank()) {
+            runCoaching()
+        } else {
+            ensureSignIn { runCoaching() }
+        }
+    }
 
     // Once every new activity has been processed, normalize and write back to Drive.
     fun finishReconcile() {
