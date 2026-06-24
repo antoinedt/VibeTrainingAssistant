@@ -164,6 +164,13 @@
   </div>
 </div>
 
+<div class="charts" style="grid-template-columns:1fr;padding-top:0;">
+  <div class="chart-card">
+    <div class="chart-title">Coach Week Ratings (/10)</div>
+    <div class="bars" id="ratingChart"></div>
+  </div>
+</div>
+
 <div class="prog-bar-wrap">
   <div class="prog-bar"><div class="prog-bar-fill" id="progFill"></div></div>
 </div>
@@ -248,9 +255,9 @@ function statusOf(w){
 })();
 
 /* CHARTS */
-function buildChart(id, getVal, colorFn){
+function buildChart(id, getVal, colorFn, fmt, maxOverride){
   var vals=WEEKS.map(getVal);
-  var max=Math.max.apply(null, vals.filter(function(v){return v>0;}).concat([1]));
+  var max=maxOverride||Math.max.apply(null, vals.filter(function(v){return v>0;}).concat([1]));
   var c=document.getElementById(id);
   c.innerHTML='';
   vals.forEach(function(v,i){
@@ -259,7 +266,7 @@ function buildChart(id, getVal, colorFn){
     var isPlan=statusOf(w)==='planned';
     var div=document.createElement('div');
     div.className='bar-w';
-    var label=v>0?((typeof v==='number'?v.toFixed(1):v)+' km'):'—';
+    var label=v>0?(fmt?fmt(v):((typeof v==='number'?v.toFixed(1):v)+' km')):'—';
     div.innerHTML='<div class="bar-tip">W'+w.n+': '+label+'</div>'
       +'<div class="bar" style="height:'+pct+'%;background:'+colorFn(w)+';opacity:'+(isPlan?0.45:1)+'"></div>'
       +'<div class="bar-lbl">'+w.n+'</div>';
@@ -279,6 +286,12 @@ buildChart('volChart',
 buildChart('longChart',
   function(w){return w.longKm||0;},
   function(){return 'var(--long)';}
+);
+buildChart('ratingChart',
+  function(w){return w.weekRating||0;},
+  function(w){var r=w.weekRating||0; return r>=8?'var(--easy)':r>=6?'var(--tempo)':'var(--long)';},
+  function(v){return v+'/10';},
+  10
 );
 
 /* ACTIVITY + WEEK RENDERING */
