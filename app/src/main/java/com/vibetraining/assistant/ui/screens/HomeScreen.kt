@@ -1,5 +1,6 @@
 package com.vibetraining.assistant.ui.screens
 
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -22,6 +23,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
+import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException
 import com.google.api.services.drive.DriveScopes
 import com.vibetraining.assistant.data.ApkSyncResult
 import com.vibetraining.assistant.data.AppPreferences
@@ -56,6 +58,9 @@ fun HomeScreen(
     var reconcileWeeks by remember { mutableStateOf<JSONArray?>(null) }
     var reconcileOriginal by remember { mutableStateOf("") }
     var pendingSync by remember { mutableStateOf(false) }
+    // Drive can demand a one-time consent screen (UserRecoverableAuthIOException);
+    // we hold its recovery intent here and launch it from a LaunchedEffect.
+    var pendingConsent by remember { mutableStateOf<Intent?>(null) }
 
     val busy = syncState is SyncState.Loading || reconcileActivities != null
 
@@ -115,7 +120,13 @@ fun HomeScreen(
                     syncState = SyncState.Idle
                 }
             } catch (e: Exception) {
-                syncState = SyncState.Error("Sync failed while $stage — ${describe(e)}")
+                val consent = recoverableConsentIntent(e)
+                if (consent != null) {
+                    syncState = SyncState.Loading("Waiting for Google Drive permission…")
+                    pendingConsent = consent
+                } else {
+                    syncState = SyncState.Error("Sync failed while $stage — ${describe(e)}")
+                }
             }
         }
     }
@@ -133,6 +144,28 @@ fun HomeScreen(
                 "Google sign-in is required to update the training log" +
                     (code?.let { " (code $it: ${GoogleSignInStatusCodes.getStatusCodeString(it)})" } ?: "") + "."
             )
+        }
+    }
+
+    // Launches Drive's consent screen; on approval the sync is retried, this time
+    // with the granted permission so the Drive read/write succeeds.
+    val consentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            runSync()
+        } else {
+            syncState = SyncState.Error(
+                "Google Drive access was declined. Sync needs permission to your training folder — tap Sync to try again."
+            )
+        }
+    }
+
+    // Fire the held consent intent exactly once when one is queued.
+    LaunchedEffect(pendingConsent) {
+        pendingConsent?.let { intent ->
+            pendingConsent = null
+            consentLauncher.launch(intent)
         }
     }
 
@@ -336,6 +369,14 @@ private fun MainButton(
         }
     }
 }
+
+/** Drive access can fail with a recoverable consent error whose recovery intent,
+ *  when launched, shows the user Google's permission screen. Returns that intent
+ *  if the error (or any cause) is one, else null. */
+private fun recoverableConsentIntent(e: Throwable?): Intent? =
+    generateSequence(e) { it.cause }
+        .mapNotNull { (it as? UserRecoverableAuthIOException)?.intent }
+        .firstOrNull()
 
 /** Renders a throwable into something actionable even when its message is null
  *  (e.g. SocketTimeoutException), walking up to three causes so the underlying
