@@ -63,6 +63,7 @@ fun HomeScreen(
     // hands any new ones to the reconciliation wizard. Assumes Google is signed in.
     fun runSync() {
         scope.launch {
+            var stage = "starting"
             try {
                 val clientId = prefs.stravaClientId
                 val clientSecret = prefs.stravaClientSecret
@@ -70,6 +71,7 @@ fun HomeScreen(
                 val nowSec = System.currentTimeMillis() / 1000
 
                 if (prefs.stravaRefreshToken.isBlank()) {
+                    stage = "Strava authorization"
                     syncState = SyncState.Loading("Authorizing with Strava…")
                     while (StravaAuthBus.codes.tryReceive().isSuccess) { /* drain stale codes */ }
                     context.startActivity(
@@ -81,17 +83,21 @@ fun HomeScreen(
                     prefsManager.saveStravaTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAt)
                     accessToken = tokens.accessToken
                 } else if (prefs.stravaExpiresAt - 60 <= nowSec) {
+                    stage = "refreshing Strava session"
                     syncState = SyncState.Loading("Refreshing Strava session…")
                     val tokens = StravaService.refresh(clientId, clientSecret, prefs.stravaRefreshToken)
                     prefsManager.saveStravaTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAt)
                     accessToken = tokens.accessToken
                 }
 
+                stage = "fetching activities from Strava"
                 syncState = SyncState.Loading("Fetching activities from Strava…")
                 val activities = StravaService.listActivities(accessToken)
 
+                stage = "reading training log from Drive"
                 syncState = SyncState.Loading("Reading training log…")
                 val original = driveService.downloadTrainingDataText().getOrThrow()
+                stage = "parsing training log"
                 val weeks = SyncReconciler.parseWeeks(original)
                 val known = SyncReconciler.existingStravaIds(weeks)
                 val fresh = activities
@@ -109,7 +115,7 @@ fun HomeScreen(
                     syncState = SyncState.Idle
                 }
             } catch (e: Exception) {
-                syncState = SyncState.Error(e.message ?: "Sync failed.")
+                syncState = SyncState.Error("Sync failed while $stage — ${describe(e)}")
             }
         }
     }
@@ -158,20 +164,24 @@ fun HomeScreen(
         reconcileWeeks = null
         if (weeks == null) return
         scope.launch {
-            syncState = SyncState.Loading("Saving training log to Drive…")
-            val today = LocalDate.now()
-            SyncReconciler.cleanPastPending(weeks, today)
-            SyncReconciler.normalizeStatuses(weeks, today)
-            val text = SyncReconciler.serialize(original, weeks)
-            val saved = driveService.saveTrainingDataText(text)
-            if (saved.isFailure) {
-                syncState = SyncState.Error("Drive save failed: ${saved.exceptionOrNull()?.message}")
-                return@launch
+            try {
+                syncState = SyncState.Loading("Saving training log to Drive…")
+                val today = LocalDate.now()
+                SyncReconciler.cleanPastPending(weeks, today)
+                SyncReconciler.normalizeStatuses(weeks, today)
+                val text = SyncReconciler.serialize(original, weeks)
+                val saved = driveService.saveTrainingDataText(text)
+                if (saved.isFailure) {
+                    syncState = SyncState.Error("Drive save failed — ${describe(saved.exceptionOrNull())}")
+                    return@launch
+                }
+                syncState = SyncState.Loading("Saving latest app build to Drive…")
+                val note = apkNote(driveService)
+                val s = if (count == 1) "activity" else "activities"
+                syncState = SyncState.Success("Training log updated · $count new $s logged. $note")
+            } catch (e: Exception) {
+                syncState = SyncState.Error("Saving failed — ${describe(e)}")
             }
-            syncState = SyncState.Loading("Saving latest app build to Drive…")
-            val note = apkNote(driveService)
-            val s = if (count == 1) "activity" else "activities"
-            syncState = SyncState.Success("Training log updated · $count new $s logged. $note")
         }
     }
 
@@ -325,6 +335,18 @@ private fun MainButton(
             }
         }
     }
+}
+
+/** Renders a throwable into something actionable even when its message is null
+ *  (e.g. SocketTimeoutException), walking up to three causes so the underlying
+ *  reason — a timeout, an auth problem, a missing file — is never swallowed. */
+private fun describe(e: Throwable?): String {
+    if (e == null) return "unknown error"
+    return generateSequence(e) { it.cause }
+        .take(3)
+        .map { t -> t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName }
+        .distinct()
+        .joinToString(" ← ")
 }
 
 /** Mirrors the newest build into Drive and returns a short status note. The copy
