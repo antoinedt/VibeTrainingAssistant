@@ -10,18 +10,10 @@ import com.google.api.services.drive.Drive
 import com.google.api.services.drive.DriveScopes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 
 private const val DRIVE_FOLDER_ID = "16tc_gd-7k8kuBN-QjLuqfIUQ4SrGkGPs"
 private const val COMPARE_HTML_NAME = "training_comparison.html"
 private const val TRAINING_DATA_NAME = "training_data.js"
-private const val APK_NAME = "VibeTraining.apk"
-private const val APK_MIME = "application/vnd.android.package-archive"
-
-/** Stable URL of the most recent debug build (the `latest` GitHub release). */
-const val LATEST_APK_URL =
-    "https://github.com/antoinedt/VibeTrainingAssistant/releases/download/latest/VibeTraining.apk"
 
 // Bundled presentation templates; the app owns the rendering so the popups,
 // charts, and insights are correct regardless of what HTML lives in Drive.
@@ -33,17 +25,7 @@ private const val TRAINING_DATA_PLACEHOLDER = "/*__TRAINING_DATA__*/"
  *  insights were freshly generated and written back to Drive. */
 data class CompareResult(val html: String, val regenerated: Boolean)
 
-/** Result of mirroring the latest APK into Drive. */
-sealed class ApkSyncResult {
-    /** Drive already held the current build (same size) — nothing transferred. */
-    object Unchanged : ApkSyncResult()
-    /** A newer build was uploaded, replacing the previous file. */
-    data class Updated(val bytes: Long) : ApkSyncResult()
-}
-
 class DriveService(private val context: Context) {
-
-    private val http = OkHttpClient()
 
     private fun buildDrive(): Drive? {
         val account = GoogleSignIn.getLastSignedInAccount(context) ?: return null
@@ -156,39 +138,5 @@ class DriveService(private val context: Context) {
             val drive = buildDrive() ?: error("Not signed in to Google")
             uploadText(drive, TRAINING_DATA_NAME, text, "text/javascript")
         }
-    }
-
-    /**
-     * Mirrors the most recent build into the Drive folder, replacing the prior
-     * `VibeTraining.apk`. One GET is opened; its Content-Length is compared to the
-     * copy already in Drive, and the ~13 MB body is only read (and uploaded) when
-     * the build actually differs — so an unchanged build transfers almost nothing.
-     */
-    suspend fun syncLatestApk(): Result<ApkSyncResult> = withContext(Dispatchers.IO) {
-        runCatching {
-            val drive = buildDrive() ?: error("Not signed in to Google")
-            val localSize = apkFileSize(drive)
-            http.newCall(Request.Builder().url(LATEST_APK_URL).build()).execute().use { resp ->
-                if (!resp.isSuccessful) error("APK download failed (${resp.code})")
-                val body = resp.body ?: error("Empty APK response")
-                val remoteSize = body.contentLength()
-                if (localSize != null && remoteSize == localSize) {
-                    ApkSyncResult.Unchanged
-                } else {
-                    val bytes = body.bytes()
-                    uploadBytes(drive, APK_NAME, bytes, APK_MIME)
-                    ApkSyncResult.Updated(bytes.size.toLong())
-                }
-            }
-        }
-    }
-
-    /** Size in bytes of the APK currently in Drive, or null if none is present. */
-    private fun apkFileSize(drive: Drive): Long? {
-        val result = drive.files().list()
-            .setQ("'$DRIVE_FOLDER_ID' in parents and name = '$APK_NAME' and trashed = false")
-            .setFields("files(id, size)")
-            .execute()
-        return result.files.firstOrNull()?.getSize()
     }
 }
