@@ -20,6 +20,14 @@ private const val TRAINING_DATA_BASE = "training_data"
 private const val COACH_NOTES_BASE = "coach_notes"
 private const val TRAINING_DATA_NAME = "training_data.js"
 
+// On-demand coaching: the app fires a Claude Code Routine through its per-routine
+// /fire endpoint. The URL and bearer token live in this small JSON file in the
+// Drive folder ({"url","token","text"?}) rather than in the APK, so the secret
+// stays in the user's private Drive and can be rotated without a rebuild.
+private const val ROUTINE_TRIGGER_NAME = "routine_trigger.json"
+private const val ROUTINE_BETA_HEADER = "experimental-cc-routine-2026-04-01"
+private const val ANTHROPIC_VERSION = "2023-06-01"
+
 // Bundled presentation templates; the app owns the rendering so the popups,
 // charts, and insights are correct regardless of what HTML lives in Drive.
 private const val TRAINING_LOG_ASSET = "training_log.html"
@@ -192,6 +200,49 @@ class DriveService(private val context: Context) {
                 uploadText(drive, TRAINING_DATA_NAME, text, "text/javascript")
             }
             Unit  // keep the runCatching result as Result<Unit>
+        }
+    }
+
+    /**
+     * Fires the coaching Routine on demand. Reads `routine_trigger.json`
+     * ({"url","token","text"?}) from the Drive folder and POSTs to the routine's
+     * /fire endpoint, returning the new session URL (or "started"). Keeping the
+     * URL+token in Drive — not the APK — means the secret never ships in the
+     * binary and can be changed by editing one file.
+     */
+    suspend fun triggerCoaching(): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val drive = buildDrive() ?: error("Not signed in to Google")
+            val config = org.json.JSONObject(downloadText(drive, ROUTINE_TRIGGER_NAME))
+            val url = config.optString("url").ifBlank { error("routine_trigger.json is missing \"url\"") }
+            val token = config.optString("token").ifBlank { error("routine_trigger.json is missing \"token\"") }
+            val text = config.optString("text").ifBlank { "Run the coaching review now." }
+            postFire(url, token, text)
+        }
+    }
+
+    private fun postFire(url: String, token: String, text: String): String {
+        val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            connectTimeout = 30_000
+            readTimeout = 30_000
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("anthropic-beta", ROUTINE_BETA_HEADER)
+            setRequestProperty("anthropic-version", ANTHROPIC_VERSION)
+            setRequestProperty("Content-Type", "application/json")
+        }
+        try {
+            val body = org.json.JSONObject().put("text", text).toString()
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            val resp = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code !in 200..299) error("Routine fire failed (HTTP $code): ${resp.take(300)}")
+            return org.json.JSONObject(resp).optString("claude_code_session_url")
+                .ifBlank { "started" }
+        } finally {
+            conn.disconnect()
         }
     }
 }
