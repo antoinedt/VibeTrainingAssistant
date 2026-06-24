@@ -75,10 +75,10 @@ fun SyncReconcileDialog(
             Column(
                 modifier = Modifier
                     .padding(20.dp)
-                    .verticalScroll(rememberScrollState())
-                    .heightIn(max = 560.dp),
+                    .heightIn(max = 600.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Fixed header.
                 Text(
                     "Activity ${index + 1} of ${activities.size}",
                     style = MaterialTheme.typography.labelMedium,
@@ -87,112 +87,121 @@ fun SyncReconcileDialog(
                 ActivityHeader(activity, isRun)
                 HorizontalDivider()
 
-                when (step) {
-                    Step.Match -> {
-                        Text("Which planned activity does this correspond to?",
-                            style = MaterialTheme.typography.titleSmall)
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            pending.forEachIndexed { i, opt ->
-                                ChoiceRow(opt.label, matchSel == i) { matchSel = i }
-                            }
-                            ChoiceRow("Other — no matching plan", matchSel == OTHER) { matchSel = OTHER }
-                        }
-                        StepButtons(
-                            primaryLabel = "Continue",
-                            primaryEnabled = matchSel != Int.MIN_VALUE,
-                            onPrimary = {
-                                if (matchSel == OTHER) {
-                                    matchedIndex = null
-                                    if (isRun) step = Step.Type
-                                    else { cls = SyncReconciler.nonRunClass(activity.type); commitAndNext(null) }
-                                } else {
-                                    val opt = pending[matchSel]
-                                    matchedIndex = opt.index
-                                    cls = opt.cls
-                                    if (isRun) step = Step.Difficulty else commitAndNext(null)
+                // Only this middle area scrolls, so the action buttons in the
+                // fixed footer below stay visible no matter how many options there are.
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    when (step) {
+                        Step.Match -> {
+                            Text("Which planned activity does this correspond to?",
+                                style = MaterialTheme.typography.titleSmall)
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                pending.forEachIndexed { i, opt ->
+                                    ChoiceRow(opt.label, matchSel == i) { matchSel = i }
                                 }
-                            },
-                            secondaryLabel = "Skip",
-                            onSecondary = {
-                                matchedIndex = null
-                                cls = SyncReconciler.nonRunClass(activity.type)
-                                    ?: if (isRun) SyncReconciler.distanceClass(activity) else null
-                                commitAndNext(null)
-                            }
-                        )
-                    }
-
-                    Step.Type -> {
-                        Text("What kind of run was it?", style = MaterialTheme.typography.titleSmall)
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            SyncReconciler.RUN_TYPES.forEach { (key, label) ->
-                                ChoiceRow(label, typeSel == key) { typeSel = key }
+                                ChoiceRow("Other — no matching plan", matchSel == OTHER) { matchSel = OTHER }
                             }
                         }
-                        StepButtons(
-                            primaryLabel = "Continue",
-                            primaryEnabled = typeSel != null,
-                            onPrimary = { cls = typeSel; step = Step.Difficulty },
-                            secondaryLabel = "Back",
-                            onSecondary = { step = Step.Match }
-                        )
+                        Step.Type -> {
+                            Text("What kind of run was it?", style = MaterialTheme.typography.titleSmall)
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                SyncReconciler.RUN_TYPES.forEach { (key, label) ->
+                                    ChoiceRow(label, typeSel == key) { typeSel = key }
+                                }
+                            }
+                        }
+                        Step.Difficulty -> {
+                            Text("How hard did it feel? (1–10)", style = MaterialTheme.typography.titleSmall)
+                            ScaleList(SyncReconciler.DIFFICULTY, difficulty) { difficulty = it }
+                        }
+                        Step.Injury -> {
+                            Text("Injury / pain status (1–10)", style = MaterialTheme.typography.titleSmall)
+                            Text("1 = fully healthy · 10 = badly hurt",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            ScaleList(SyncReconciler.INJURY, injury) { injury = it }
+                            OutlinedTextField(
+                                value = injuryComment,
+                                onValueChange = { injuryComment = it },
+                                label = { Text("Details (optional)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 2
+                            )
+                        }
+                        Step.Recap -> {
+                            Text("Training recap", style = MaterialTheme.typography.titleSmall)
+                            OutlinedTextField(
+                                value = recap,
+                                onValueChange = { recap = it },
+                                label = { Text("How did it go?") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 4
+                            )
+                        }
                     }
+                }
 
-                    Step.Difficulty -> {
-                        Text("How hard did it feel? (1–10)", style = MaterialTheme.typography.titleSmall)
-                        ScaleList(SyncReconciler.DIFFICULTY, difficulty) { difficulty = it }
-                        StepButtons(
-                            primaryLabel = "Continue",
-                            primaryEnabled = difficulty > 0,
-                            onPrimary = { step = Step.Injury },
-                            secondaryLabel = "Back",
-                            onSecondary = { step = if (matchedIndex == null) Step.Type else Step.Match }
-                        )
-                    }
-
-                    Step.Injury -> {
-                        Text("Injury / pain status (1–10)", style = MaterialTheme.typography.titleSmall)
-                        Text("1 = fully healthy · 10 = badly hurt",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        ScaleList(SyncReconciler.INJURY, injury) { injury = it }
-                        OutlinedTextField(
-                            value = injuryComment,
-                            onValueChange = { injuryComment = it },
-                            label = { Text("Details (optional)") },
-                            modifier = Modifier.fillMaxWidth(),
-                            minLines = 2
-                        )
-                        StepButtons(
-                            primaryLabel = "Continue",
-                            primaryEnabled = injury > 0,
-                            onPrimary = { step = Step.Recap },
-                            secondaryLabel = "Back",
-                            onSecondary = { step = Step.Difficulty }
-                        )
-                    }
-
-                    Step.Recap -> {
-                        Text("Training recap", style = MaterialTheme.typography.titleSmall)
-                        OutlinedTextField(
-                            value = recap,
-                            onValueChange = { recap = it },
-                            label = { Text("How did it go?") },
-                            modifier = Modifier.fillMaxWidth(),
-                            minLines = 4
-                        )
-                        StepButtons(
-                            primaryLabel = if (index + 1 < activities.size) "Save & next" else "Save & finish",
-                            primaryEnabled = true,
-                            onPrimary = {
-                                commitAndNext(
-                                    SyncReconciler.RunFeedback(difficulty, injury, injuryComment, recap)
-                                )
-                            },
-                            secondaryLabel = "Back",
-                            onSecondary = { step = Step.Injury }
-                        )
-                    }
+                // Pinned footer — the step's actions, always visible.
+                when (step) {
+                    Step.Match -> StepButtons(
+                        primaryLabel = "Continue",
+                        primaryEnabled = matchSel != Int.MIN_VALUE,
+                        onPrimary = {
+                            if (matchSel == OTHER) {
+                                matchedIndex = null
+                                if (isRun) step = Step.Type
+                                else { cls = SyncReconciler.nonRunClass(activity.type); commitAndNext(null) }
+                            } else {
+                                val opt = pending[matchSel]
+                                matchedIndex = opt.index
+                                cls = opt.cls
+                                if (isRun) step = Step.Difficulty else commitAndNext(null)
+                            }
+                        },
+                        secondaryLabel = "Skip",
+                        onSecondary = {
+                            matchedIndex = null
+                            cls = SyncReconciler.nonRunClass(activity.type)
+                                ?: if (isRun) SyncReconciler.distanceClass(activity) else null
+                            commitAndNext(null)
+                        }
+                    )
+                    Step.Type -> StepButtons(
+                        primaryLabel = "Continue",
+                        primaryEnabled = typeSel != null,
+                        onPrimary = { cls = typeSel; step = Step.Difficulty },
+                        secondaryLabel = "Back",
+                        onSecondary = { step = Step.Match }
+                    )
+                    Step.Difficulty -> StepButtons(
+                        primaryLabel = "Continue",
+                        primaryEnabled = difficulty > 0,
+                        onPrimary = { step = Step.Injury },
+                        secondaryLabel = "Back",
+                        onSecondary = { step = if (matchedIndex == null) Step.Type else Step.Match }
+                    )
+                    Step.Injury -> StepButtons(
+                        primaryLabel = "Continue",
+                        primaryEnabled = injury > 0,
+                        onPrimary = { step = Step.Recap },
+                        secondaryLabel = "Back",
+                        onSecondary = { step = Step.Difficulty }
+                    )
+                    Step.Recap -> StepButtons(
+                        primaryLabel = if (index + 1 < activities.size) "Save & next" else "Save & finish",
+                        primaryEnabled = true,
+                        onPrimary = {
+                            commitAndNext(
+                                SyncReconciler.RunFeedback(difficulty, injury, injuryComment, recap)
+                            )
+                        },
+                        secondaryLabel = "Back",
+                        onSecondary = { step = Step.Injury }
+                    )
                 }
             }
         }

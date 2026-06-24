@@ -1,6 +1,8 @@
 package com.vibetraining.assistant.ui.screens
 
 import android.annotation.SuppressLint
+import android.os.Build
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -115,6 +117,13 @@ fun HtmlWebView(html: String) {
                 webViewClient = WebViewClient()
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
+                // The pages bring their own dark theme; stop WebView from applying
+                // its own algorithmic darkening on top (which hides popup text).
+                // The color-scheme meta covers newer WebViews; this covers API 29–32.
+                @Suppress("DEPRECATION")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    settings.forceDark = WebSettings.FORCE_DARK_OFF
+                }
                 loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
             }
         },

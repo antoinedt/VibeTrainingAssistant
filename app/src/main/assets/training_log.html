@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- The page ships its own dark palette; tell WebView so it doesn't apply its
+     own algorithmic darkening, which otherwise washes out text (e.g. the
+     activity popup's name/description). -->
+<meta name="color-scheme" content="dark">
 <title>Berlin 2026 — Training Log</title>
 <style>
   :root {
@@ -182,8 +186,8 @@ var ACT_DATA=[];
 var RACE_DATE=new Date('2026-09-27T00:00:00');
 
 function statusOf(w){
-  if(w.status==='actual'||w.status==='current'||w.status==='planned') return w.status;
-  /* Fall back to a date-derived status when not explicitly set. */
+  /* Derive status from today's date so the "Now" week always matches the
+     calendar, regardless of any stale status baked into the data. */
   var today=new Date(); today.setHours(0,0,0,0);
   var msW=7*24*3600*1000;
   var we=new Date(RACE_DATE.getTime()-(26-w.n)*msW);
