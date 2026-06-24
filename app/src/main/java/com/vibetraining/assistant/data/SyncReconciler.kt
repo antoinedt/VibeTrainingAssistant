@@ -251,13 +251,14 @@ object SyncReconciler {
             o.put("injuryLabel", INJURY[feedback.injury - 1])
             if (feedback.injuryComment.isNotBlank()) o.put("injuryComment", feedback.injuryComment.trim())
             if (feedback.recap.isNotBlank()) o.put("recap", feedback.recap.trim())
-            o.put("notes", buildNotes(feedback))
+            o.put("athleteNotes", buildAthleteNotes(feedback))
         }
         return o
     }
 
-    /** A human-readable Coach-Notes string so the feedback shows in the log popup. */
-    private fun buildNotes(f: RunFeedback): String = buildString {
+    /** A human-readable Athlete-Notes string (the athlete's own input) shown in
+     *  the log popup. The separate `notes` field is reserved for coach notes. */
+    private fun buildAthleteNotes(f: RunFeedback): String = buildString {
         append("Difficulty ${f.difficulty}/10 — ${DIFFICULTY[f.difficulty - 1]}\n")
         append("Injury ${f.injury}/10 — ${INJURY[f.injury - 1]}")
         if (f.injuryComment.isNotBlank()) append(" (${f.injuryComment.trim()})")
@@ -309,7 +310,7 @@ object SyncReconciler {
 
     private val WEEK_KEY_ORDER = listOf("n", "dates", "phase", "status", "runKm", "longKm", "acts")
     private val ACT_KEY_ORDER = listOf(
-        "d", "ic", "cls", "nm", "km", "sub", "flags", "desc", "strava_id", "notes",
+        "d", "ic", "cls", "nm", "km", "sub", "flags", "desc", "strava_id", "notes", "athleteNotes",
         "difficulty", "difficultyLabel", "injury", "injuryLabel", "injuryComment", "recap"
     )
 

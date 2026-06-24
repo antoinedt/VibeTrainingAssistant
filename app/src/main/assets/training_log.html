@@ -117,6 +117,11 @@
   .p-notes{display:none;margin-top:16px;padding:11px 14px;background:#0d1020;border-left:3px solid #4a9eff;border-radius:0 8px 8px 0;}
   .p-notes-label{font-size:.67rem;font-weight:700;letter-spacing:.7px;color:#4a9eff;text-transform:uppercase;margin-bottom:5px;}
   .p-notes-body{font-size:.83rem;line-height:1.65;color:#a8c0e8;white-space:pre-line;}
+  /* Athlete notes (the athlete's own input) get a green accent to set them
+     apart from coach notes. */
+  .p-athlete{border-left-color:#4caf76;}
+  .p-athlete .p-notes-label{color:#4caf76;}
+  .p-athlete .p-notes-body{color:#bfe3cf;}
   .p-close{position:absolute;top:14px;right:16px;background:none;border:none;color:var(--sub);font-size:1.5rem;cursor:pointer;line-height:1;}
   .p-close:hover{color:var(--text);}
 </style>
@@ -167,6 +172,10 @@
     <div class="p-meta" id="p-meta"></div>
     <div class="p-desc" id="p-desc"></div>
     <div class="p-stats" id="p-stats"></div>
+    <div class="p-notes p-athlete" id="p-athlete">
+      <div class="p-notes-label">Athlete Notes</div>
+      <div class="p-notes-body" id="p-athlete-body"></div>
+    </div>
     <div class="p-notes" id="p-notes">
       <div class="p-notes-label">Coach Notes</div>
       <div class="p-notes-body" id="p-notes-body"></div>
@@ -350,6 +359,16 @@ function openPopup(idx){
 
   /* Full description — the part that was previously missing. */
   document.getElementById('p-desc').textContent=a.desc||'';
+
+  /* Athlete notes — the athlete's own input from the sync flow. */
+  var athEl=document.getElementById('p-athlete');
+  var athTxt=a.athleteNotes||'';
+  if(athTxt){
+    document.getElementById('p-athlete-body').textContent=athTxt;
+    athEl.style.display='block';
+  } else {
+    athEl.style.display='none';
+  }
 
   var notesEl=document.getElementById('p-notes');
   var notesTxt=a.notes||'';
