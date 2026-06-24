@@ -32,6 +32,9 @@
   @media(max-width:900px){.charts{grid-template-columns:1fr;}}
   .chart-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;}
   .chart-title{font-size:.82rem;font-weight:700;color:var(--sub);text-transform:uppercase;letter-spacing:.7px;margin-bottom:14px;}
+  .prob-legend{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;font-size:.74rem;color:var(--sub);}
+  .prob-legend .pl{display:flex;align-items:center;gap:6px;}
+  .prob-legend .pl-dot{width:14px;height:3px;border-radius:2px;}
   .bars{display:flex;align-items:flex-end;height:120px;gap:3px;}
   .bar-w{display:flex;flex-direction:column;align-items:center;flex:1;height:100%;justify-content:flex-end;position:relative;cursor:pointer;}
   .bar-w:hover .bar-tip{opacity:1;}
@@ -171,6 +174,14 @@
   </div>
 </div>
 
+<div class="charts" style="grid-template-columns:1fr;padding-top:0;">
+  <div class="chart-card">
+    <div class="chart-title">Goal Probability Progression</div>
+    <div class="prob-legend" id="probLegend"></div>
+    <div id="probChart"></div>
+  </div>
+</div>
+
 <div class="prog-bar-wrap">
   <div class="prog-bar"><div class="prog-bar-fill" id="progFill"></div></div>
 </div>
@@ -211,7 +222,13 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
   var A=(COACH&&COACH.activities)||{}, W=(COACH&&COACH.weeks)||{};
   WEEKS.forEach(function(w){
     var wc=W[String(w.n)];
-    if(wc){ if(wc.weekRating!=null) w.weekRating=wc.weekRating; if(wc.weekAnalysis) w.weekAnalysis=wc.weekAnalysis; }
+    if(wc){
+      if(wc.weekRating!=null) w.weekRating=wc.weekRating;
+      if(wc.weekAnalysis) w.weekAnalysis=wc.weekAnalysis;
+      if(wc.probA!=null) w.probA=wc.probA;
+      if(wc.probB!=null) w.probB=wc.probB;
+      if(wc.probC!=null) w.probC=wc.probC;
+    }
     (w.acts||[]).forEach(function(a){
       var ac=(a.strava_id!=null)?A[String(a.strava_id)]:null;
       if(ac){ if(ac.coachRating!=null) a.coachRating=ac.coachRating; if(ac.notes) a.notes=ac.notes; }
@@ -293,6 +310,42 @@ buildChart('ratingChart',
   function(v){return v+'/10';},
   10
 );
+
+/* GOAL PROBABILITY PROGRESSION (line chart) */
+(function(){
+  var GOALS=(COACH&&COACH.goals)||{a:'A',b:'B',c:'C'};
+  var SERIES=[
+    {key:'probC',label:'C',time:GOALS.c,color:'#4caf76'},
+    {key:'probB',label:'B',time:GOALS.b,color:'#4a9eff'},
+    {key:'probA',label:'A',time:GOALS.a,color:'#ff8c42'}
+  ];
+  var pts=WEEKS.filter(function(w){return w.probB!=null;});
+  var legendEl=document.getElementById('probLegend');
+  legendEl.innerHTML=SERIES.slice().reverse().map(function(s){
+    return '<div class="pl"><span class="pl-dot" style="background:'+s.color+'"></span>'
+      +s.label+(s.time?' &middot; '+s.time:'')+'</div>';
+  }).join('');
+  var host=document.getElementById('probChart');
+  if(!pts.length){ host.innerHTML='<div class="empty-week">No rated weeks yet.</div>'; return; }
+  var Wd=600,Hd=210,L=26,R=10,T=10,B=22, pw=Wd-L-R, ph=Hd-T-B, n=pts.length;
+  function X(i){return L+(n<=1?pw/2:i/(n-1)*pw);}
+  function Y(p){return T+(1-p/100)*ph;}
+  var svg='<svg viewBox="0 0 '+Wd+' '+Hd+'" width="100%" preserveAspectRatio="xMidYMid meet">';
+  [0,25,50,75,100].forEach(function(p){
+    svg+='<line x1="'+L+'" y1="'+Y(p)+'" x2="'+(Wd-R)+'" y2="'+Y(p)+'" stroke="#2a2d3e" stroke-width="1"/>';
+    svg+='<text x="'+(L-4)+'" y="'+(Y(p)+3)+'" fill="#8b92a9" font-size="9" text-anchor="end">'+p+'</text>';
+  });
+  pts.forEach(function(w,i){
+    svg+='<text x="'+X(i)+'" y="'+(Hd-B+13)+'" fill="#8b92a9" font-size="9" text-anchor="middle">'+w.n+'</text>';
+  });
+  SERIES.forEach(function(s){
+    var poly=pts.map(function(w,i){return X(i)+','+Y(w[s.key]||0);}).join(' ');
+    svg+='<polyline fill="none" stroke="'+s.color+'" stroke-width="2" points="'+poly+'"/>';
+    svg+=pts.map(function(w,i){return '<circle cx="'+X(i)+'" cy="'+Y(w[s.key]||0)+'" r="2.6" fill="'+s.color+'"/>';}).join('');
+  });
+  svg+='</svg>';
+  host.innerHTML=svg;
+})();
 
 /* ACTIVITY + WEEK RENDERING */
 function flagHtml(flags){
