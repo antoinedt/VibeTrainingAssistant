@@ -56,10 +56,13 @@ fun HomeScreen(
     var reconcileActivities by remember { mutableStateOf<List<StravaActivity>?>(null) }
     var reconcileWeeks by remember { mutableStateOf<JSONArray?>(null) }
     var reconcileOriginal by remember { mutableStateOf("") }
-    var pendingSync by remember { mutableStateOf(false) }
+    // The action to resume once Google sign-in completes (sync or coach review).
+    var pendingAuthAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     // Drive can demand a one-time consent screen (UserRecoverableAuthIOException);
-    // we hold its recovery intent here and launch it from a LaunchedEffect.
+    // we hold its recovery intent here and launch it from a LaunchedEffect, plus
+    // the action to retry once permission is granted.
     var pendingConsent by remember { mutableStateOf<Intent?>(null) }
+    var afterConsent by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     val busy = syncState is SyncState.Loading || reconcileActivities != null
 
@@ -119,6 +122,7 @@ fun HomeScreen(
             } catch (e: Exception) {
                 val consent = recoverableConsentIntent(e)
                 if (consent != null) {
+                    afterConsent = { runSync() }
                     syncState = SyncState.Loading("Waiting for Google Drive permission…")
                     pendingConsent = consent
                 } else {
@@ -128,14 +132,38 @@ fun HomeScreen(
         }
     }
 
+    // Fires the on-demand coaching Routine (reads its URL+token from Drive and
+    // POSTs to the /fire endpoint). Assumes Google is signed in.
+    fun runCoaching() {
+        scope.launch {
+            try {
+                syncState = SyncState.Loading("Asking the coach to review…")
+                driveService.triggerCoaching().getOrThrow()
+                syncState = SyncState.Success(
+                    "Coach review started. New ratings will appear in your Training Log shortly."
+                )
+            } catch (e: Exception) {
+                val consent = recoverableConsentIntent(e)
+                if (consent != null) {
+                    afterConsent = { runCoaching() }
+                    syncState = SyncState.Loading("Waiting for Google Drive permission…")
+                    pendingConsent = consent
+                } else {
+                    syncState = SyncState.Error("Couldn't start coach review — ${describe(e)}")
+                }
+            }
+        }
+    }
+
     val googleSignInLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        val action = pendingAuthAction
+        pendingAuthAction = null
         if (task.isSuccessful) {
-            if (pendingSync) { pendingSync = false; runSync() }
+            action?.invoke()
         } else {
-            pendingSync = false
             val code = (task.exception as? ApiException)?.statusCode
             syncState = SyncState.Error(
                 "Google sign-in is required to update the training log" +
@@ -150,10 +178,13 @@ fun HomeScreen(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            runSync()
+            val retry = afterConsent
+            afterConsent = null
+            (retry ?: { runSync() }).invoke()
         } else {
+            afterConsent = null
             syncState = SyncState.Error(
-                "Google Drive access was declined. Sync needs permission to your training folder — tap Sync to try again."
+                "Google Drive access was declined. The app needs permission to your training folder — tap the button again to retry."
             )
         }
     }
@@ -168,15 +199,11 @@ fun HomeScreen(
 
     // Entry point for the Sync button: ensure credentials and a Google session,
     // then run the sync (which may route through Strava authorization first).
-    fun startSync() {
-        if (prefs.stravaClientId.isBlank() || prefs.stravaClientSecret.isBlank()) {
-            onSettings()
-            return
-        }
+    fun ensureSignIn(then: () -> Unit) {
         if (driveService.isSignedIn()) {
-            runSync()
+            then()
         } else {
-            pendingSync = true
+            pendingAuthAction = then
             val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                 .requestEmail()
                 .requestScopes(Scope(DriveScopes.DRIVE))
@@ -184,6 +211,18 @@ fun HomeScreen(
             googleSignInLauncher.launch(GoogleSignIn.getClient(context, gso).signInIntent)
         }
     }
+
+    fun startSync() {
+        if (prefs.stravaClientId.isBlank() || prefs.stravaClientSecret.isBlank()) {
+            onSettings()
+            return
+        }
+        ensureSignIn { runSync() }
+    }
+
+    // Coaching only needs Drive (to read the routine trigger config), so no
+    // Strava credentials gate here.
+    fun startCoaching() = ensureSignIn { runCoaching() }
 
     // Once every new activity has been processed, normalize and write back to Drive.
     fun finishReconcile() {
@@ -258,6 +297,14 @@ fun HomeScreen(
                     icon = "🔄",
                     enabled = !busy,
                     onClick = { startSync() }
+                )
+
+                MainButton(
+                    label = "Coach Review",
+                    description = "Rate new runs · Update log",
+                    icon = "🧠",
+                    enabled = !busy,
+                    onClick = { startCoaching() }
                 )
 
                 MainButton(
