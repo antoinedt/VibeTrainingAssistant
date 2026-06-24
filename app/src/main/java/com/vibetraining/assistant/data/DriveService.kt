@@ -184,6 +184,7 @@ class DriveService(private val context: Context) {
             } else {
                 uploadText(drive, TRAINING_DATA_NAME, text, "text/javascript")
             }
+            Unit  // keep the runCatching result as Result<Unit>
         }
     }
 }
