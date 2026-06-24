@@ -13,6 +13,11 @@ import kotlinx.coroutines.withContext
 
 private const val DRIVE_FOLDER_ID = "16tc_gd-7k8kuBN-QjLuqfIUQ4SrGkGPs"
 private const val COMPARE_HTML_NAME = "training_comparison.html"
+// Base names of versioned files. The app always uses the highest-numbered one:
+// `<base>.<ext>` is version 0, `<base>_<n>.<ext>` is version n. This lets a new
+// version be added without overwriting the previous file.
+private const val TRAINING_DATA_BASE = "training_data"
+private const val COACH_NOTES_BASE = "coach_notes"
 private const val TRAINING_DATA_NAME = "training_data.js"
 
 // Bundled presentation templates; the app owns the rendering so the popups,
@@ -20,6 +25,7 @@ private const val TRAINING_DATA_NAME = "training_data.js"
 private const val TRAINING_LOG_ASSET = "training_log.html"
 private const val COMPARE_ASSET = "training_comparison.html"
 private const val TRAINING_DATA_PLACEHOLDER = "/*__TRAINING_DATA__*/"
+private const val COACH_DATA_PLACEHOLDER = "__COACH_DATA__"
 
 /** Outcome of opening the Compare screen: the HTML to render plus whether the
  *  insights were freshly generated and written back to Drive. */
@@ -67,10 +73,38 @@ class DriveService(private val context: Context) {
 
     private fun downloadText(drive: Drive, fileName: String): String {
         val id = findFileId(drive, fileName) ?: error("File '$fileName' not found in Drive folder")
-        return drive.files().get(id).executeMediaAsInputStream().use { stream ->
-            stream.bufferedReader().readText()
-        }
+        return downloadById(drive, id)
     }
+
+    private fun downloadById(drive: Drive, id: String): String =
+        drive.files().get(id).executeMediaAsInputStream().use { it.bufferedReader().readText() }
+
+    /**
+     * Id of the highest-numbered file matching `<base>.<ext>` / `<base>_<n>.<ext>`
+     * in the folder (bare name counts as version 0), or null if none exist.
+     */
+    private fun latestVersionId(drive: Drive, base: String, ext: String): String? {
+        val regex = Regex("^" + Regex.escape(base) + "(?:_(\\d+))?\\." + Regex.escape(ext) + "$")
+        val files = drive.files().list()
+            .setQ("'$DRIVE_FOLDER_ID' in parents and name contains '$base' and trashed = false")
+            .setFields("files(id, name)")
+            .execute().files
+        return files
+            .mapNotNull { f -> regex.matchEntire(f.name)?.let { f to (it.groupValues[1].toIntOrNull() ?: 0) } }
+            .maxByOrNull { it.second }
+            ?.first?.id
+    }
+
+    /** Reads the latest training_data*.js from the folder. */
+    private fun readLatestTrainingData(drive: Drive): String {
+        val id = latestVersionId(drive, TRAINING_DATA_BASE, "js")
+            ?: error("No training_data*.js found in the Drive folder")
+        return downloadById(drive, id)
+    }
+
+    /** Reads the latest coach_notes*.json overlay, or null when none exists. */
+    private fun readLatestCoachNotes(drive: Drive): String? =
+        latestVersionId(drive, COACH_NOTES_BASE, "json")?.let { downloadById(drive, it) }
 
     private fun loadAsset(name: String): String =
         context.assets.open(name).bufferedReader().use { it.readText() }
@@ -84,14 +118,20 @@ class DriveService(private val context: Context) {
     suspend fun fetchTrainingHtml(): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val drive = buildDrive() ?: error("Not signed in to Google")
-            val dataJs = downloadText(drive, TRAINING_DATA_NAME)
+            val dataJs = readLatestTrainingData(drive)
+            // Coach analysis lives in a separate, assistant-maintained overlay so
+            // it never collides with the Strava-driven training data; the template
+            // merges it into each activity/week before rendering.
+            val coachJson = readLatestCoachNotes(drive) ?: "{}"
             val template = loadAsset(TRAINING_LOG_ASSET)
             if (!template.contains(TRAINING_DATA_PLACEHOLDER)) {
                 error("Training Log template is missing its data placeholder")
             }
             // Kotlin's String.replace(String, String) is a literal replacement,
             // so '$' or '\' in the data are inserted verbatim.
-            template.replace(TRAINING_DATA_PLACEHOLDER, dataJs)
+            template
+                .replace(TRAINING_DATA_PLACEHOLDER, dataJs)
+                .replace(COACH_DATA_PLACEHOLDER, coachJson)
         }
     }
 
@@ -106,7 +146,7 @@ class DriveService(private val context: Context) {
         withContext(Dispatchers.IO) {
             runCatching {
                 val drive = buildDrive() ?: error("Not signed in to Google")
-                val dataJs = downloadText(drive, TRAINING_DATA_NAME)
+                val dataJs = readLatestTrainingData(drive)
                 val checksum = CompareRenderer.checksum(dataJs)
                 val facts = CompareRenderer.deriveFacts(CompareRenderer.parseWeeks(dataJs))
                 val template = loadAsset(COMPARE_ASSET)
@@ -124,19 +164,26 @@ class DriveService(private val context: Context) {
 
     fun isSignedIn(): Boolean = GoogleSignIn.getLastSignedInAccount(context) != null
 
-    /** Raw `training_data.js` from Drive, for diffing newly-synced activities. */
+    /** Latest training_data*.js from Drive, for diffing newly-synced activities. */
     suspend fun downloadTrainingDataText(): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val drive = buildDrive() ?: error("Not signed in to Google")
-            downloadText(drive, TRAINING_DATA_NAME)
+            readLatestTrainingData(drive)
         }
     }
 
-    /** Writes the reconciled `training_data.js` back to the Drive folder. */
+    /** Writes the reconciled data back over the latest training_data*.js (in
+     *  place), or creates `training_data.js` if none exists yet. */
     suspend fun saveTrainingDataText(text: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val drive = buildDrive() ?: error("Not signed in to Google")
-            uploadText(drive, TRAINING_DATA_NAME, text, "text/javascript")
+            val media = ByteArrayContent("text/javascript", text.toByteArray(Charsets.UTF_8))
+            val id = latestVersionId(drive, TRAINING_DATA_BASE, "js")
+            if (id != null) {
+                drive.files().update(id, com.google.api.services.drive.model.File(), media).execute()
+            } else {
+                uploadText(drive, TRAINING_DATA_NAME, text, "text/javascript")
+            }
         }
     }
 }

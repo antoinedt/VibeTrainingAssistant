@@ -60,6 +60,11 @@
   .w-km{font-weight:700;font-size:.92rem;}
   .w-badges{display:flex;gap:6px;margin-left:auto;align-items:center;}
   .w-badge-status{font-size:.7rem;padding:2px 7px;border-radius:8px;}
+  .w-coach{background:#1a2040;color:#4a9eff;font-weight:700;}
+  /* Week-level coach analysis block, shown at the top of an expanded week. */
+  .week-coach{margin-bottom:12px;padding:11px 14px;background:#0d1020;border-left:3px solid #4a9eff;border-radius:0 8px 8px 0;}
+  .week-coach-label{font-size:.67rem;font-weight:700;letter-spacing:.7px;color:#4a9eff;text-transform:uppercase;margin-bottom:5px;}
+  .week-coach-body{font-size:.83rem;line-height:1.65;color:#a8c0e8;white-space:pre-line;}
   .badge-actual{background:#1a2a1a;color:#4caf76;}
   .badge-current{background:#1a2a40;color:#4a9eff;animation:pulse-badge 2s infinite;}
   .badge-planned{background:#2a2a2a;color:#8b92a9;}
@@ -130,6 +135,8 @@
 
 <!-- Training data is injected here by the app (replaces the placeholder below). -->
 <script>/*__TRAINING_DATA__*/</script>
+<!-- Coach analysis overlay (assistant-maintained), injected by the app. -->
+<script>var COACH = __COACH_DATA__;</script>
 
 <div class="hdr">
   <h1>Berlin Marathon 2026 <span>🏁</span></h1>
@@ -186,6 +193,24 @@
 <script>
 /* Defensive: if the data failed to inject, surface it rather than rendering blank. */
 if (typeof WEEKS === 'undefined') { window.WEEKS = []; }
+if (typeof COACH === 'undefined') { window.COACH = {}; }
+
+/* Small HTML escaper for values inserted via innerHTML. */
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+/* Merge the assistant's coach overlay into the live data, keyed by Strava id
+   (per activity) and week number (per week), before anything renders. */
+(function(){
+  var A=(COACH&&COACH.activities)||{}, W=(COACH&&COACH.weeks)||{};
+  WEEKS.forEach(function(w){
+    var wc=W[String(w.n)];
+    if(wc){ if(wc.weekRating!=null) w.weekRating=wc.weekRating; if(wc.weekAnalysis) w.weekAnalysis=wc.weekAnalysis; }
+    (w.acts||[]).forEach(function(a){
+      var ac=(a.strava_id!=null)?A[String(a.strava_id)]:null;
+      if(ac){ if(ac.coachRating!=null) a.coachRating=ac.coachRating; if(ac.notes) a.notes=ac.notes; }
+    });
+  });
+})();
 
 var TYPE_COLOR={easy:'var(--easy)',tempo:'var(--tempo)',long:'var(--long)','race-r':'var(--race)',bike:'var(--bike)',wt:'var(--wt)','rest-c':'var(--rest)'};
 var TYPE_LABEL={easy:'Easy Run',tempo:'Quality Run',long:'Long Run','race-r':'Race',bike:'Bike / Zwift',wt:'Strength','rest-c':'Rest'};
@@ -319,10 +344,12 @@ WEEKS.forEach(function(w, wi){
       +phaseLabel(w.phase||'BASE')
       +'<div class="w-km">'+km+'</div>'
       +'<div class="w-badges">'+weekStatusBadge(status)
+        +(w.weekRating!=null?'<span class="w-badge-status w-coach">Coach '+w.weekRating+'/10</span>':'')
         +'<span class="chevron'+(isCurrent?' open':'')+'" id="chev-'+wi+'">&#x25BE;</span>'
       +'</div>'
     +'</div>'
     +'<div class="week-body'+(isCurrent?' open':'')+'" id="wb-'+wi+'">'
+      +(w.weekAnalysis?'<div class="week-coach"><div class="week-coach-label">Coach Analysis'+(w.weekRating!=null?' &middot; '+w.weekRating+'/10':'')+'</div><div class="week-coach-body">'+esc(w.weekAnalysis)+'</div></div>':'')
       +'<div class="acts">'+(actsHtml||'<div class="empty-week">No activities logged yet.</div>')+'</div>'
     +'</div>';
   container.appendChild(card);
@@ -384,6 +411,7 @@ function openPopup(idx){
   if(a.sub && !pending) stats.push({v:a.sub, l:'Avg Pace'});
   var extra=(a.flags||[]).filter(function(f){return f!=='key'&&f!=='race';});
   if(extra.length) stats.push({v:extra.join(', '), l:'Highlights'});
+  if(a.coachRating!=null) stats.push({v:a.coachRating+'/10', l:'Coach Rating'});
   document.getElementById('p-stats').innerHTML=stats.map(function(s){
     return '<div class="p-stat"><div class="p-stat-v">'+s.v+'</div><div class="p-stat-l">'+s.l+'</div></div>';
   }).join('');
