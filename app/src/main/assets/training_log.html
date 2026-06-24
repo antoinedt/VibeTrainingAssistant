@@ -102,7 +102,9 @@
   /* POPUP */
   .overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:none;backdrop-filter:blur(3px);}
   .overlay.open{display:flex;align-items:center;justify-content:center;}
-  .popup{background:#1a1d27;border:1px solid #3a3d5a;border-radius:16px;padding:28px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto;position:relative;}
+  /* min-height is in px (not vh): some WebViews compute vh tiny here, which used
+     to shrink the popup to the tag and force everything else into a scroll. */
+  .popup{background:#1a1d27;border:1px solid #3a3d5a;border-radius:16px;padding:24px;max-width:520px;width:92%;min-height:360px;max-height:88vh;overflow-y:auto;position:relative;}
   .p-tag{font-size:.72rem;font-weight:700;letter-spacing:.7px;text-transform:uppercase;padding:3px 9px;border-radius:10px;display:inline-block;margin-bottom:12px;}
   .p-name{font-size:1.2rem;font-weight:800;margin-bottom:6px;}
   .p-meta{font-size:.82rem;color:var(--sub);margin-bottom:16px;}
