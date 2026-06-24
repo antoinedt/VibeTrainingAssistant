@@ -106,6 +106,12 @@ class DriveService(private val context: Context) {
     private fun readLatestCoachNotes(drive: Drive): String? =
         latestVersionId(drive, COACH_NOTES_BASE, "json")?.let { downloadById(drive, it) }
 
+    /** The latest training_log*.html template hosted in Drive, or null when none
+     *  exists. Lets the Training Log presentation be updated without an app build. */
+    private fun readLatestTemplate(drive: Drive): String? =
+        latestVersionId(drive, "training_log", "html")
+            ?.let { runCatching { downloadById(drive, it) }.getOrNull() }
+
     private fun loadAsset(name: String): String =
         context.assets.open(name).bufferedReader().use { it.readText() }
 
@@ -123,10 +129,11 @@ class DriveService(private val context: Context) {
             // it never collides with the Strava-driven training data; the template
             // merges it into each activity/week before rendering.
             val coachJson = readLatestCoachNotes(drive) ?: "{}"
-            val template = loadAsset(TRAINING_LOG_ASSET)
-            if (!template.contains(TRAINING_DATA_PLACEHOLDER)) {
-                error("Training Log template is missing its data placeholder")
-            }
+            // Prefer a Drive-hosted template (so the presentation can be updated
+            // without an app build); fall back to the bundled asset, which always
+            // carries the data placeholder.
+            val template = readLatestTemplate(drive)?.takeIf { it.contains(TRAINING_DATA_PLACEHOLDER) }
+                ?: loadAsset(TRAINING_LOG_ASSET)
             // Kotlin's String.replace(String, String) is a literal replacement,
             // so '$' or '\' in the data are inserted verbatim.
             template
