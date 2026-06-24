@@ -23,6 +23,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 import com.google.api.services.drive.DriveScopes
+import com.vibetraining.assistant.data.ApkSyncResult
 import com.vibetraining.assistant.data.AppPreferences
 import com.vibetraining.assistant.data.DriveService
 import com.vibetraining.assistant.data.PreferencesManager
@@ -98,7 +99,9 @@ fun HomeScreen(
                     .sortedBy { it.startDateLocal }
 
                 if (fresh.isEmpty()) {
-                    syncState = SyncState.Success("No new activities. Training log is up to date.")
+                    syncState = SyncState.Loading("Saving latest app build to Drive…")
+                    val note = apkNote(driveService)
+                    syncState = SyncState.Success("No new activities. Training log is up to date. $note")
                 } else {
                     reconcileOriginal = original
                     reconcileWeeks = weeks
@@ -160,13 +163,15 @@ fun HomeScreen(
             SyncReconciler.cleanPastPending(weeks, today)
             SyncReconciler.normalizeStatuses(weeks, today)
             val text = SyncReconciler.serialize(original, weeks)
-            driveService.saveTrainingDataText(text).fold(
-                onSuccess = {
-                    val s = if (count == 1) "activity" else "activities"
-                    syncState = SyncState.Success("Training log updated · $count new $s logged.")
-                },
-                onFailure = { syncState = SyncState.Error("Drive save failed: ${it.message}") }
-            )
+            val saved = driveService.saveTrainingDataText(text)
+            if (saved.isFailure) {
+                syncState = SyncState.Error("Drive save failed: ${saved.exceptionOrNull()?.message}")
+                return@launch
+            }
+            syncState = SyncState.Loading("Saving latest app build to Drive…")
+            val note = apkNote(driveService)
+            val s = if (count == 1) "activity" else "activities"
+            syncState = SyncState.Success("Training log updated · $count new $s logged. $note")
         }
     }
 
@@ -321,6 +326,19 @@ private fun MainButton(
         }
     }
 }
+
+/** Mirrors the newest build into Drive and returns a short status note. The copy
+ *  is best-effort — a failure never fails the sync, it just notes it was skipped. */
+private suspend fun apkNote(drive: DriveService): String =
+    drive.syncLatestApk().fold(
+        onSuccess = { result ->
+            when (result) {
+                ApkSyncResult.Unchanged -> "Latest app build already in Drive."
+                is ApkSyncResult.Updated -> "Latest app build copied to Drive."
+            }
+        },
+        onFailure = { "App-build copy to Drive skipped." }
+    )
 
 sealed class SyncState {
     object Idle : SyncState()
