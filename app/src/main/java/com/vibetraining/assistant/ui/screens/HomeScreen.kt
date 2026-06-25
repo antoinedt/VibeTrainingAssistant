@@ -25,7 +25,6 @@ import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException
 import com.google.api.services.drive.DriveScopes
-import com.vibetraining.assistant.data.AppPreferences
 import com.vibetraining.assistant.data.DriveService
 import com.vibetraining.assistant.data.PreferencesManager
 import com.vibetraining.assistant.data.StravaActivity
@@ -49,7 +48,9 @@ fun HomeScreen(
     val context = LocalContext.current
     val prefsManager = remember { PreferencesManager(context) }
     val driveService = remember { DriveService(context) }
-    val prefs by prefsManager.preferences.collectAsState(initial = AppPreferences())
+    // null until the stored prefs have loaded, so launch logic can tell
+    // "still loading" apart from "loaded but empty" (which means → Settings).
+    val prefs by prefsManager.preferences.collectAsState(initial = null)
     val scope = rememberCoroutineScope()
 
     // The interactive reconciliation set, populated once new activities are found.
@@ -72,12 +73,13 @@ fun HomeScreen(
         scope.launch {
             var stage = "starting"
             try {
-                val clientId = prefs.stravaClientId
-                val clientSecret = prefs.stravaClientSecret
-                var accessToken = prefs.stravaAccessToken
+                val p = prefs ?: return@launch
+                val clientId = p.stravaClientId
+                val clientSecret = p.stravaClientSecret
+                var accessToken = p.stravaAccessToken
                 val nowSec = System.currentTimeMillis() / 1000
 
-                if (prefs.stravaRefreshToken.isBlank()) {
+                if (p.stravaRefreshToken.isBlank()) {
                     stage = "Strava authorization"
                     syncState = SyncState.Loading("Authorizing with Strava…")
                     while (StravaAuthBus.codes.tryReceive().isSuccess) { /* drain stale codes */ }
@@ -89,10 +91,10 @@ fun HomeScreen(
                     val tokens = StravaService.exchangeCode(clientId, clientSecret, code)
                     prefsManager.saveStravaTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAt)
                     accessToken = tokens.accessToken
-                } else if (prefs.stravaExpiresAt - 60 <= nowSec) {
+                } else if (p.stravaExpiresAt - 60 <= nowSec) {
                     stage = "refreshing Strava session"
                     syncState = SyncState.Loading("Refreshing Strava session…")
-                    val tokens = StravaService.refresh(clientId, clientSecret, prefs.stravaRefreshToken)
+                    val tokens = StravaService.refresh(clientId, clientSecret, p.stravaRefreshToken)
                     prefsManager.saveStravaTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAt)
                     accessToken = tokens.accessToken
                 }
@@ -138,7 +140,9 @@ fun HomeScreen(
         scope.launch {
             try {
                 syncState = SyncState.Loading("Asking the coach to review…")
-                driveService.triggerCoaching(prefs.coachFireUrl, prefs.coachFireToken).getOrThrow()
+                driveService.triggerCoaching(
+                    prefs?.coachFireUrl.orEmpty(), prefs?.coachFireToken.orEmpty()
+                ).getOrThrow()
                 syncState = SyncState.Success(
                     "Coach review started. New ratings will appear in your Training Log shortly."
                 )
@@ -213,7 +217,7 @@ fun HomeScreen(
     }
 
     fun startSync() {
-        if (prefs.stravaClientId.isBlank() || prefs.stravaClientSecret.isBlank()) {
+        if (prefs?.stravaClientId.isNullOrBlank() || prefs?.stravaClientSecret.isNullOrBlank()) {
             onSettings()
             return
         }
@@ -223,10 +227,23 @@ fun HomeScreen(
     // With the routine URL+token in Settings, coaching needs no Google sign-in;
     // only the Drive-config fallback path does, so gate on that.
     fun startCoaching() {
-        if (prefs.coachFireUrl.isNotBlank() && prefs.coachFireToken.isNotBlank()) {
+        if (!prefs?.coachFireUrl.isNullOrBlank() && !prefs?.coachFireToken.isNullOrBlank()) {
             runCoaching()
         } else {
             ensureSignIn { runCoaching() }
+        }
+    }
+
+    // No manual Sync button: sync automatically once the screen opens. When the
+    // prefs have loaded, redirect to Settings if Strava isn't configured yet,
+    // otherwise start a sync. Keyed on the credentials so it fires on launch and
+    // re-fires once after they're first filled in.
+    LaunchedEffect(prefs?.stravaClientId, prefs?.stravaClientSecret) {
+        val p = prefs ?: return@LaunchedEffect
+        if (p.stravaClientId.isBlank() || p.stravaClientSecret.isBlank()) {
+            onSettings()
+        } else if (syncState is SyncState.Idle && reconcileActivities == null) {
+            startSync()
         }
     }
 
@@ -297,14 +314,6 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                MainButton(
-                    label = "Sync Activities",
-                    description = "Pull from Strava · Update Drive",
-                    icon = "🔄",
-                    enabled = !busy,
-                    onClick = { startSync() }
-                )
-
                 MainButton(
                     label = "Coach Review",
                     description = "Rate new runs · Update log",
