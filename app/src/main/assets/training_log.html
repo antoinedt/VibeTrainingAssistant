@@ -63,7 +63,7 @@
   .w-km{font-weight:700;font-size:.92rem;}
   .w-badges{display:flex;gap:6px;margin-left:auto;align-items:center;}
   .w-badge-status{font-size:.7rem;padding:2px 7px;border-radius:8px;}
-  .w-coach{background:#1a2040;color:#4a9eff;font-weight:700;}
+  .w-coach{color:#0c0e16;font-weight:700;cursor:pointer;}
   /* Week-level coach analysis block, shown at the top of an expanded week. */
   .week-coach{margin-bottom:12px;padding:11px 14px;background:#0d1020;border-left:3px solid #4a9eff;border-radius:0 8px 8px 0;}
   .week-coach-label{font-size:.67rem;font-weight:700;letter-spacing:.7px;color:#4a9eff;text-transform:uppercase;margin-bottom:5px;}
@@ -206,6 +206,15 @@
       <div class="p-notes-label">Coach Notes</div>
       <div class="p-notes-body" id="p-notes-body"></div>
     </div>
+  </div>
+</div>
+
+<div class="overlay" id="weekpopup" onclick="closeWeekPopup(event)">
+  <div class="popup" onclick="event.stopPropagation()">
+    <button class="p-close" onclick="closeWeekPopup()">&#x00D7;</button>
+    <div class="p-name" id="wp-title"></div>
+    <div class="p-meta"><span class="w-badge-status w-coach" id="wp-rating" style="cursor:default"></span></div>
+    <div class="week-coach-body" id="wp-body" style="margin-top:14px"></div>
   </div>
 </div>
 
@@ -417,12 +426,11 @@ WEEKS.forEach(function(w, wi){
       +phaseLabel(w.phase||'BASE')
       +'<div class="w-km">'+km+'</div>'
       +'<div class="w-badges">'+weekStatusBadge(status)
-        +(w.weekRating!=null?'<span class="w-badge-status w-coach">Coach '+w.weekRating+'/10</span>':'')
+        +(w.weekRating!=null?'<span class="w-badge-status w-coach" style="background:'+ratingColor(w.weekRating)+'"'+(w.weekAnalysis?' onclick="event.stopPropagation();openWeekPopup('+w.n+')" title="Coach review"':'')+'>Coach '+w.weekRating+'/10</span>':'')
         +'<span class="chevron'+(isCurrent?' open':'')+'" id="chev-'+wi+'">&#x25BE;</span>'
       +'</div>'
     +'</div>'
     +'<div class="week-body'+(isCurrent?' open':'')+'" id="wb-'+wi+'">'
-      +(w.weekAnalysis?'<div class="week-coach"><div class="week-coach-label">Coach Analysis'+(w.weekRating!=null?' &middot; '+w.weekRating+'/10':'')+'</div><div class="week-coach-body">'+esc(w.weekAnalysis)+'</div></div>':'')
       +'<div class="acts">'+(actsHtml||'<div class="empty-week">No activities logged yet.</div>')+'</div>'
     +'</div>';
   container.appendChild(card);
@@ -496,8 +504,29 @@ function closePopup(e){
   if(!e || e.target===document.getElementById('popup'))
     document.getElementById('popup').classList.remove('open');
 }
+
+/* WEEK COACH-REVIEW POPUP — the /10 stays on the header; tapping it opens the analysis. */
+function openWeekPopup(n){
+  var w=null;
+  for(var i=0;i<WEEKS.length;i++){ if(WEEKS[i].n===n){ w=WEEKS[i]; break; } }
+  if(!w || w.weekAnalysis==null) return;
+  document.getElementById('wp-title').textContent='Week '+n+' · Coach Review';
+  var rb=document.getElementById('wp-rating');
+  if(w.weekRating!=null){ rb.textContent='Coach '+w.weekRating+'/10'; rb.style.background=ratingColor(w.weekRating); rb.style.display='inline-block'; }
+  else { rb.style.display='none'; }
+  document.getElementById('wp-body').textContent=w.weekAnalysis;
+  document.getElementById('weekpopup').classList.add('open');
+}
+function closeWeekPopup(e){
+  if(!e || e.target===document.getElementById('weekpopup'))
+    document.getElementById('weekpopup').classList.remove('open');
+}
+
 document.addEventListener('keydown',function(e){
-  if(e.key==='Escape') document.getElementById('popup').classList.remove('open');
+  if(e.key==='Escape'){
+    document.getElementById('popup').classList.remove('open');
+    document.getElementById('weekpopup').classList.remove('open');
+  }
 });
 
 /* Scroll the current week into view. */
