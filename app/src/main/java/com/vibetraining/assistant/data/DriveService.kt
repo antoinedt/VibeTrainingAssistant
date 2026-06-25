@@ -29,9 +29,8 @@ private const val ROUTINE_TRIGGER_NAME = "routine_trigger.json"
 private const val ROUTINE_BETA_HEADER = "experimental-cc-routine-2026-04-01"
 private const val ANTHROPIC_VERSION = "2023-06-01"
 
-// Bundled presentation templates; the app owns the rendering so the popups,
-// charts, and insights are correct regardless of what HTML lives in Drive.
-private const val TRAINING_LOG_ASSET = "training_log.html"
+// Bundled Compare template (still rendered by the app). The Training Log
+// template is required to live in Drive — see fetchTrainingHtml.
 private const val COMPARE_ASSET = "training_comparison.html"
 private const val TRAINING_DATA_PLACEHOLDER = "/*__TRAINING_DATA__*/"
 private const val COACH_DATA_PLACEHOLDER = "__COACH_DATA__"
@@ -143,11 +142,12 @@ class DriveService(private val context: Context) {
             // it never collides with the Strava-driven training data; the template
             // merges it into each activity/week before rendering.
             val coachJson = readLatestCoachNotes(drive) ?: "{}"
-            // Prefer a Drive-hosted template (so the presentation can be updated
-            // without an app build); fall back to the bundled asset, which always
-            // carries the data placeholder.
+            // The template must live in Drive (so the presentation is updated
+            // without an app build, and it's unambiguous which one is in use).
+            // No bundled fallback: a missing/invalid template fails loudly so it's
+            // obvious the Drive file needs (re)uploading.
             val template = readLatestTemplate(drive)?.takeIf { it.contains(TRAINING_DATA_PLACEHOLDER) }
-                ?: loadAsset(TRAINING_LOG_ASSET)
+                ?: error("Missing training_log.html in your Drive folder. Upload the template (with the data placeholder) there to view the Training Log.")
             // Kotlin's String.replace(String, String) is a literal replacement,
             // so '$' or '\' in the data are inserted verbatim.
             template
