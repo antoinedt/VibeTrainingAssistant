@@ -24,6 +24,7 @@ import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 import com.google.api.services.drive.DriveScopes
 import com.vibetraining.assistant.data.DriveService
+import com.vibetraining.assistant.data.PreferencesManager
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -32,10 +33,33 @@ import kotlinx.coroutines.launch
 fun TrainingScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val driveService = remember { DriveService(context) }
+    val prefsManager = remember { PreferencesManager(context) }
+    val prefs by prefsManager.preferences.collectAsState(initial = null)
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
     var htmlContent by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+    var firing by remember { mutableStateOf(false) }
+
+    // Fires the coaching Routine to rate newly logged runs/weeks; the new ratings
+    // land in the coach_notes overlay and show on next reload.
+    fun runCoachReview() {
+        if (firing) return
+        firing = true
+        scope.launch {
+            driveService.triggerCoaching(
+                prefs?.coachFireUrl.orEmpty(), prefs?.coachFireToken.orEmpty(),
+                "Run the coaching review now: rate newly logged runs and any unanalysed completed weeks."
+            ).fold(
+                onSuccess = {
+                    snackbar.showSnackbar("Coach review started — reload in a moment to see new ratings.")
+                },
+                onFailure = { snackbar.showSnackbar("Couldn't start coach review — ${it.message}") }
+            )
+            firing = false
+        }
+    }
 
     val signInLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -79,12 +103,18 @@ fun TrainingScreen(onBack: () -> Unit) {
     LaunchedEffect(Unit) { loadOrSignIn() }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("Training Log") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = { runCoachReview() }, enabled = !firing) {
+                        Text(if (firing) "…" else "Coach")
                     }
                 }
             )

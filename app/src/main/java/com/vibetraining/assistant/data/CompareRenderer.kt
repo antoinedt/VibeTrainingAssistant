@@ -31,6 +31,17 @@ object CompareRenderer {
     private val MIX_LABELS = listOf("Easy", "Tempo", "Long", "Race", "Bike", "Weights")
     private val MIX_SWATCHES = listOf("#27ae60", "#f1c40f", "#e74c3c", "#ff6b6b", "#3498db", "#9b59b6")
 
+    /** Built-in Key Insights, used when no `compare_notes` overlay exists in Drive
+     *  yet. Once the coach writes an overlay, these are replaced by its analysis. */
+    private val DEFAULT_INSIGHTS = listOf(
+        "Volume Comparison" to "Berlin is tracking well ahead of both prior cycles at the same point — the strongest base of the three.",
+        "Quality Work (Tempo %)" to "Montreal: 17% tempo/long. Chicago: 19% — nearly pure easy volume. Berlin: highest share of quality work of all three.",
+        "Peak Long Run" to "Montreal peaked at 29 km (W23) but loaded the taper heavy. Chicago peaked at 23.5 km. Berlin planned peak is 32 km (W19).",
+        "Cross-Training" to "Zero bike or weights in the Chicago cycle. Montreal had 7 short rides. Berlin adds Zwift + weights for injury resilience.",
+        "Consistency" to "Chicago had a zero-km week (W15) and several sub-15 km weeks. Montreal dropped to ~11 km in W5–6. Berlin has been more consistent.",
+        "Race Trajectory" to "Chicago improved by 15 min on lower volume. Berlin targets a further 18–22 min improvement on higher quality and consistency."
+    )
+
     /** SHA-256 of the raw data file, hex-encoded — stable across identical data. */
     fun checksum(dataJs: String): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(dataJs.toByteArray(Charsets.UTF_8))
@@ -129,13 +140,45 @@ object CompareRenderer {
         }
     }
 
-    /** Substitutes every placeholder in the bundled template. The Key Insights
-     *  are static text in the template, so nothing AI-generated is injected. */
+    /** Parses a `compare_notes.json` overlay ({"insights":[{"label","text"}…]})
+     *  into (label, text) pairs, or returns the built-in defaults when the
+     *  overlay is absent or malformed. */
+    fun parseInsights(overlayJson: String?): List<Pair<String, String>> {
+        if (overlayJson.isNullOrBlank()) return DEFAULT_INSIGHTS
+        return runCatching {
+            val arr = org.json.JSONObject(overlayJson).optJSONArray("insights") ?: return DEFAULT_INSIGHTS
+            val out = ArrayList<Pair<String, String>>(arr.length())
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val label = o.optString("label").trim()
+                val text = o.optString("text").trim()
+                if (label.isNotEmpty() || text.isNotEmpty()) out.add(label to text)
+            }
+            out.ifEmpty { DEFAULT_INSIGHTS }
+        }.getOrDefault(DEFAULT_INSIGHTS)
+    }
+
+    /** Renders the Key Insights cards from (label, text) pairs. */
+    fun insightsHtml(insights: List<Pair<String, String>>): String = buildString {
+        for ((label, text) in insights) {
+            append("<div class=\"insight\"><div class=\"i-label\">")
+            append(escape(label)).append("</div><div class=\"i-val\">")
+            append(escape(text)).append("</div></div>")
+        }
+    }
+
+    private fun escape(s: String): String = s
+        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    /** Substitutes every placeholder in the bundled template, including the Key
+     *  Insights (from the Drive overlay when present, else the built-in text). */
     fun fillTemplate(
         template: String,
         facts: BerlinFacts,
-        checksum: String
+        checksum: String,
+        insights: List<Pair<String, String>> = DEFAULT_INSIGHTS
     ): String = template
+        .replace("__INSIGHTS__", insightsHtml(insights))
         .replace("__DATA_CHECKSUM__", checksum)
         .replace("__BER_ACTUAL_N__", facts.actualN.toString())
         .replace("__BER_KM__", jsArray(facts.km))
