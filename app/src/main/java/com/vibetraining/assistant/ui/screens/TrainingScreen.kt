@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -113,6 +114,9 @@ fun TrainingScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { loadOrSignIn() }, enabled = !loading) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Reload")
+                    }
                     TextButton(onClick = { runCoachReview() }, enabled = !firing) {
                         Text(if (firing) "…" else "Coach")
                     }
