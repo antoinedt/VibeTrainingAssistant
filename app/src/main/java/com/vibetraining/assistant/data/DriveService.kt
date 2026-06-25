@@ -18,6 +18,7 @@ private const val COMPARE_HTML_NAME = "training_comparison.html"
 // version be added without overwriting the previous file.
 private const val TRAINING_DATA_BASE = "training_data"
 private const val COACH_NOTES_BASE = "coach_notes"
+private const val COMPARE_NOTES_BASE = "compare_notes"
 private const val TRAINING_DATA_NAME = "training_data.js"
 
 // On-demand coaching: the app fires a Claude Code Routine through its per-routine
@@ -114,6 +115,11 @@ class DriveService(private val context: Context) {
     private fun readLatestCoachNotes(drive: Drive): String? =
         latestVersionId(drive, COACH_NOTES_BASE, "json")?.let { downloadById(drive, it) }
 
+    /** Reads the latest compare_notes*.json overlay (the coach-authored Key
+     *  Insights for the Cycle Comparison), or null when none exists. */
+    private fun readLatestCompareNotes(drive: Drive): String? =
+        latestVersionId(drive, COMPARE_NOTES_BASE, "json")?.let { downloadById(drive, it) }
+
     /** The latest training_log*.html template hosted in Drive, or null when none
      *  exists. Lets the Training Log presentation be updated without an app build. */
     private fun readLatestTemplate(drive: Drive): String? =
@@ -153,19 +159,25 @@ class DriveService(private val context: Context) {
     /**
      * Builds the Cycle Comparison page. Berlin's charts and stats are derived
      * from the live training log every time (Montreal/Chicago are fixed
-     * references; the Key Insights are static text in the template). When the
-     * training data has changed since the last build — tracked by a checksum
-     * embedded in the page — the fresh page is written back to Drive.
+     * references). The Key Insights come from a coach-authored compare_notes*.json
+     * overlay in Drive when present (so the analysis can be regenerated
+     * autonomously), falling back to the built-in text. When the data or the
+     * overlay has changed since the last build — tracked by a checksum embedded
+     * in the page — the fresh page is written back to Drive.
      */
     suspend fun regenerateOrLoadComparison(): Result<CompareResult> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val drive = buildDrive() ?: error("Not signed in to Google")
                 val dataJs = readLatestTrainingData(drive)
-                val checksum = CompareRenderer.checksum(dataJs)
+                val compareJson = readLatestCompareNotes(drive)
+                // Fold the overlay into the checksum so refreshed insights also
+                // trigger a rewrite, not just changed training data.
+                val checksum = CompareRenderer.checksum(dataJs + (compareJson ?: ""))
                 val facts = CompareRenderer.deriveFacts(CompareRenderer.parseWeeks(dataJs))
+                val insights = CompareRenderer.parseInsights(compareJson)
                 val template = loadAsset(COMPARE_ASSET)
-                val html = CompareRenderer.fillTemplate(template, facts, checksum)
+                val html = CompareRenderer.fillTemplate(template, facts, checksum, insights)
 
                 val existing = runCatching { downloadText(drive, COMPARE_HTML_NAME) }.getOrNull()
                 val storedChecksum = existing?.let { CompareRenderer.extractChecksum(it) }
@@ -210,23 +222,23 @@ class DriveService(private val context: Context) {
      * ({"url","token","text"?}) in the Drive folder. Either way the bearer token
      * lives outside the APK and can be changed without a rebuild.
      */
-    suspend fun triggerCoaching(url: String = "", token: String = ""): Result<String> =
+    suspend fun triggerCoaching(url: String = "", token: String = "", text: String = ""): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
                 var u = url.trim()
                 var t = token.trim()
-                var text = ""
+                var x = text.trim()
                 if (u.isBlank() || t.isBlank()) {
                     // Fall back to the Drive-hosted config for anything not supplied.
                     val drive = buildDrive() ?: error("Not signed in to Google")
                     val config = org.json.JSONObject(downloadText(drive, ROUTINE_TRIGGER_NAME))
                     if (u.isBlank()) u = config.optString("url").trim()
                     if (t.isBlank()) t = config.optString("token").trim()
-                    text = config.optString("text").trim()
+                    if (x.isBlank()) x = config.optString("text").trim()
                 }
                 if (u.isBlank()) error("No routine URL set — add it in Settings.")
                 if (t.isBlank()) error("No routine token set — add it in Settings.")
-                postFire(u, t, text.ifBlank { "Run the coaching review now." })
+                postFire(u, t, x.ifBlank { "Run the coaching review now." })
             }
         }
 

@@ -19,6 +19,7 @@ import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 import com.google.api.services.drive.DriveScopes
 import com.vibetraining.assistant.data.DriveService
+import com.vibetraining.assistant.data.PreferencesManager
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -27,10 +28,14 @@ import kotlinx.coroutines.launch
 fun CompareScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val driveService = remember { DriveService(context) }
+    val prefsManager = remember { PreferencesManager(context) }
+    val prefs by prefsManager.preferences.collectAsState(initial = null)
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
     var htmlContent by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+    var firing by remember { mutableStateOf(false) }
 
     suspend fun regenerate() {
         loading = true
@@ -39,6 +44,27 @@ fun CompareScreen(onBack: () -> Unit) {
             onFailure = { error = it.message }
         )
         loading = false
+    }
+
+    // Fires the Routine to regenerate the cycle-comparison Key Insights. The
+    // coach writes a compare_notes overlay to Drive; the new analysis shows on
+    // next reload of this page (which folds the overlay into the render).
+    fun redoAnalysis() {
+        if (firing) return
+        firing = true
+        scope.launch {
+            driveService.triggerCoaching(
+                prefs?.coachFireUrl.orEmpty(), prefs?.coachFireToken.orEmpty(),
+                "Regenerate the cycle comparison analysis: write fresh Key Insights to the " +
+                    "compare_notes overlay in Drive, comparing Berlin against the Montreal and Chicago cycles."
+            ).fold(
+                onSuccess = {
+                    snackbar.showSnackbar("Analysis requested — reload in a moment to see the new insights.")
+                },
+                onFailure = { snackbar.showSnackbar("Couldn't start analysis — ${it.message}") }
+            )
+            firing = false
+        }
     }
 
     val signInLauncher = rememberLauncherForActivityResult(
@@ -69,12 +95,18 @@ fun CompareScreen(onBack: () -> Unit) {
     LaunchedEffect(Unit) { loadOrSignIn() }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("Cycle Comparison") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = { redoAnalysis() }, enabled = !firing) {
+                        Text(if (firing) "…" else "Redo analysis")
                     }
                 }
             )

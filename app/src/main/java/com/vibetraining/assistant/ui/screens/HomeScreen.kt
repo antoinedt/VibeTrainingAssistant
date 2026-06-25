@@ -134,31 +134,6 @@ fun HomeScreen(
         }
     }
 
-    // Fires the on-demand coaching Routine (reads its URL+token from Drive and
-    // POSTs to the /fire endpoint). Assumes Google is signed in.
-    fun runCoaching() {
-        scope.launch {
-            try {
-                syncState = SyncState.Loading("Asking the coach to review…")
-                driveService.triggerCoaching(
-                    prefs?.coachFireUrl.orEmpty(), prefs?.coachFireToken.orEmpty()
-                ).getOrThrow()
-                syncState = SyncState.Success(
-                    "Coach review started. New ratings will appear in your Training Log shortly."
-                )
-            } catch (e: Exception) {
-                val consent = recoverableConsentIntent(e)
-                if (consent != null) {
-                    afterConsent = { runCoaching() }
-                    syncState = SyncState.Loading("Waiting for Google Drive permission…")
-                    pendingConsent = consent
-                } else {
-                    syncState = SyncState.Error("Couldn't start coach review — ${describe(e)}")
-                }
-            }
-        }
-    }
-
     val googleSignInLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -224,25 +199,17 @@ fun HomeScreen(
         ensureSignIn { runSync() }
     }
 
-    // With the routine URL+token in Settings, coaching needs no Google sign-in;
-    // only the Drive-config fallback path does, so gate on that.
-    fun startCoaching() {
-        if (!prefs?.coachFireUrl.isNullOrBlank() && !prefs?.coachFireToken.isNullOrBlank()) {
-            runCoaching()
-        } else {
-            ensureSignIn { runCoaching() }
-        }
-    }
-
-    // No manual Sync button: sync automatically once the screen opens. When the
-    // prefs have loaded, redirect to Settings if Strava isn't configured yet,
-    // otherwise start a sync. Keyed on the credentials so it fires on launch and
-    // re-fires once after they're first filled in.
+    // No manual Sync button: sync automatically, but only once per app launch —
+    // not every time we return to Home. A process-scoped gate (LaunchSync) holds
+    // the "already synced this launch" flag. When prefs load, redirect to Settings
+    // if Strava isn't configured; otherwise sync once and latch the gate. The
+    // redirect doesn't latch, so the first sync still fires after creds are saved.
     LaunchedEffect(prefs?.stravaClientId, prefs?.stravaClientSecret) {
         val p = prefs ?: return@LaunchedEffect
         if (p.stravaClientId.isBlank() || p.stravaClientSecret.isBlank()) {
             onSettings()
-        } else if (syncState is SyncState.Idle && reconcileActivities == null) {
+        } else if (!LaunchSync.done && syncState is SyncState.Idle && reconcileActivities == null) {
+            LaunchSync.done = true
             startSync()
         }
     }
@@ -314,14 +281,6 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                MainButton(
-                    label = "Coach Review",
-                    description = "Rate new runs · Update log",
-                    icon = "🧠",
-                    enabled = !busy,
-                    onClick = { startCoaching() }
-                )
-
                 MainButton(
                     label = "Training Log",
                     description = "Berlin W1–W26",
@@ -425,6 +384,13 @@ private fun MainButton(
             }
         }
     }
+}
+
+/** Process-scoped latch so the auto-sync runs once per app launch, not on every
+ *  return to the Home screen. Reset only when the process is recreated (a true
+ *  cold launch), which matches "sync when launching the app". */
+private object LaunchSync {
+    var done = false
 }
 
 /** Drive access can fail with a recoverable consent error whose recovery intent,
