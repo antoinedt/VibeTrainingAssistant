@@ -51,7 +51,8 @@
   .week-card.current-week{border-color:#4a9eff;box-shadow:0 0 0 1px rgba(74,158,255,.25);}
   .week-card:hover{border-color:#3a3d5a;}
 
-  .week-hdr{display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;user-select:none;}
+  .week-hdr{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:12px 16px;cursor:pointer;user-select:none;}
+  .w-dates{flex-shrink:0;}
   .week-hdr:hover{background:rgba(255,255,255,.03);}
   .w-num{background:#2a2d3e;border-radius:6px;padding:2px 8px;font-size:.78rem;font-weight:700;color:var(--sub);min-width:34px;text-align:center;}
   .w-dates{font-size:.82rem;color:var(--sub);min-width:100px;}
@@ -435,7 +436,7 @@ WEEKS.forEach(function(w, wi){
       +'</div>'
     +'</div>'
     +'<div class="week-body'+(isCurrent?' open':'')+'" id="wb-'+wi+'">'
-      +(w.weekAnalysis?'<button class="week-coach-btn" onclick="openWeekPopup('+w.n+')"><span>&#129504; Coach Analysis</span>'+(w.weekRating!=null?'<span class="wcb-rate" style="background:'+ratingColor(w.weekRating)+'">'+w.weekRating+'/10</span>':'')+'<span class="wcb-arrow">&#8250;</span></button>':'')
+      +(w.weekAnalysis?'<button class="week-coach-btn" onclick="openWeekPopup('+w.n+')"><span>&#129504; Coach Analysis</span><span class="wcb-arrow">&#8250;</span></button>':'')
       +'<div class="acts">'+(actsHtml||'<div class="empty-week">No activities logged yet.</div>')+'</div>'
     +'</div>';
   container.appendChild(card);
