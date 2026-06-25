@@ -68,6 +68,10 @@
   .week-coach{margin-bottom:12px;padding:11px 14px;background:#0d1020;border-left:3px solid #4a9eff;border-radius:0 8px 8px 0;}
   .week-coach-label{font-size:.67rem;font-weight:700;letter-spacing:.7px;color:#4a9eff;text-transform:uppercase;margin-bottom:5px;}
   .week-coach-body{font-size:.83rem;line-height:1.65;color:#a8c0e8;white-space:pre-line;}
+  .week-coach-btn{display:flex;align-items:center;gap:9px;width:100%;background:#0d1020;border:1px solid #1e2540;border-left:3px solid #4a9eff;border-radius:8px;padding:10px 13px;margin-bottom:11px;cursor:pointer;color:#a8c0e8;font-size:.8rem;font-weight:700;font-family:inherit;text-align:left;letter-spacing:.3px;}
+  .week-coach-btn:hover{background:#11162c;}
+  .wcb-rate{color:#0c0e16;font-weight:700;padding:1px 7px;border-radius:6px;font-size:.74rem;}
+  .wcb-arrow{margin-left:auto;font-size:1.15rem;color:var(--sub);}
   .badge-actual{background:#1a2a1a;color:#4caf76;}
   .badge-current{background:#1a2a40;color:#4a9eff;animation:pulse-badge 2s infinite;}
   .badge-planned{background:#2a2a2a;color:#8b92a9;}
@@ -431,6 +435,7 @@ WEEKS.forEach(function(w, wi){
       +'</div>'
     +'</div>'
     +'<div class="week-body'+(isCurrent?' open':'')+'" id="wb-'+wi+'">'
+      +(w.weekAnalysis?'<button class="week-coach-btn" onclick="openWeekPopup('+w.n+')"><span>&#129504; Coach Analysis</span>'+(w.weekRating!=null?'<span class="wcb-rate" style="background:'+ratingColor(w.weekRating)+'">'+w.weekRating+'/10</span>':'')+'<span class="wcb-arrow">&#8250;</span></button>':'')
       +'<div class="acts">'+(actsHtml||'<div class="empty-week">No activities logged yet.</div>')+'</div>'
     +'</div>';
   container.appendChild(card);
