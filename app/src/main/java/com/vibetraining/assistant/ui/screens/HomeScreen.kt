@@ -218,7 +218,11 @@ fun HomeScreen(
     fun finishReconcile() {
         val weeks = reconcileWeeks
         val original = reconcileOriginal
-        val count = reconcileActivities?.size ?: 0
+        val added = reconcileActivities.orEmpty()
+        val count = added.size
+        // A newly-added run is something the coach can review, so kick off a coach
+        // review automatically once it's saved (when the routine is configured).
+        val hasRun = added.any { it.type.contains("Run", ignoreCase = true) }
         reconcileActivities = null
         reconcileWeeks = null
         if (weeks == null) return
@@ -235,7 +239,23 @@ fun HomeScreen(
                     return@launch
                 }
                 val s = if (count == 1) "activity" else "activities"
-                syncState = SyncState.Success("Training log updated · $count new $s logged.")
+                val logged = "Training log updated · $count new $s logged."
+                val url = prefs?.coachFireUrl.orEmpty()
+                val token = prefs?.coachFireToken.orEmpty()
+                if (hasRun && url.isNotBlank() && token.isNotBlank()) {
+                    syncState = SyncState.Loading("Starting coach review…")
+                    val fired = driveService.triggerCoaching(
+                        url, token,
+                        "Run the coaching review now: rate newly logged runs and any unanalysed completed weeks."
+                    )
+                    syncState = if (fired.isSuccess) {
+                        SyncState.Success("$logged Coach review started — open Training Log shortly.")
+                    } else {
+                        SyncState.Success("$logged (Coach review didn't start: ${describe(fired.exceptionOrNull())})")
+                    }
+                } else {
+                    syncState = SyncState.Success(logged)
+                }
             } catch (e: Exception) {
                 syncState = SyncState.Error("Saving failed — ${describe(e)}")
             }
