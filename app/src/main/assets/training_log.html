@@ -99,6 +99,7 @@
   .flag-pr{background:#2a0030;color:#cc88ff;}
   .flag-key{background:#2a1a00;color:#ff8c42;}
   .flag-1st{background:#1a2a00;color:#88ff44;}
+  .act-coach{font-size:.66rem;font-weight:700;color:#0c0e16;padding:1px 6px;border-radius:6px;margin-left:6px;white-space:nowrap;flex-shrink:0;}
 
   .week-card.planned-week{border-color:#1a1d2e;background:#13151e;}
   .week-card.planned-week .week-hdr{opacity:.6;}
@@ -348,6 +349,7 @@ buildChart('ratingChart',
 })();
 
 /* ACTIVITY + WEEK RENDERING */
+function ratingColor(r){return r>=8?'#4caf76':r>=6?'#e0a83a':'#d2603a';}
 function flagHtml(flags){
   if(!flags||!flags.length) return '';
   return flags.map(function(f){
@@ -366,10 +368,15 @@ function actHtml(a, w){
   var flags=flagHtml(a.flags);
   var km=a.km?'<span style="font-weight:700;color:var(--text)">'+(typeof a.km==='number'?a.km.toFixed(1):a.km)+' km</span> ':'';
   var sub=a.sub?'<span>'+a.sub+'</span>':'';
+  // Surface the coach's rating directly on the row (not only in the popup).
+  var coach=a.coachRating!=null
+    ? '<span class="act-coach" title="Coach rating" style="background:'+ratingColor(a.coachRating)+'">&#9733; '+a.coachRating+'/10</span>'
+    : '';
   return '<div class="act'+(pending?' pending':'')+'" onclick="openPopup('+idx+')">'
     +'<span class="act-d">'+(a.d||'')+'</span>'
     +'<span class="act-ic">'+(a.ic||'')+'</span>'
     +'<span class="act-nm '+(a.cls||'')+'">'+(a.nm||'')+flags+'</span>'
+    +coach
     +'<div class="act-r">'+km+sub+'</div>'
     +'</div>';
 }
