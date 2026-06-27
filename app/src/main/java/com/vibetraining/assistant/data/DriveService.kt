@@ -20,6 +20,10 @@ private const val TRAINING_DATA_BASE = "training_data"
 private const val COACH_NOTES_BASE = "coach_notes"
 private const val COMPARE_NOTES_BASE = "compare_notes"
 private const val TRAINING_DATA_NAME = "training_data.js"
+// Per-week overlay files (week_NN.js). Folded over the base training_data at
+// read time for the view paths so a single week can be revised by uploading one
+// small file. See readWeekOverlays / readAssembledTrainingData.
+private const val WEEK_OVERLAY_PREFIX = "week_"
 
 // On-demand coaching: the app fires a Claude Code Routine through its per-routine
 // /fire endpoint. The URL and bearer token live in this small JSON file in the
@@ -110,6 +114,59 @@ class DriveService(private val context: Context) {
         return downloadById(drive, id)
     }
 
+    /**
+     * Per-week overlay files let a single week be revised by uploading one small
+     * file (`week_NN.js`, ~2 KB) instead of rewriting the whole plan. They are a
+     * read-time fold over the base training_data for the *view* paths only — the
+     * Strava sync read/write keep using the monolithic base, so actuals are never
+     * touched by this. A week number maps to the highest-version file
+     * (`week_NN.js` is v0, `week_NN_v.js` is v_); each holds one week's JSON
+     * object. Returns week-number → file contents.
+     */
+    private fun readWeekOverlays(drive: Drive): Map<Int, String> {
+        val rx = Regex("^${WEEK_OVERLAY_PREFIX}(\\d{2})(?:_(\\d+))?\\.js$")
+        val files = drive.files().list()
+            .setQ("'$DRIVE_FOLDER_ID' in parents and name contains '$WEEK_OVERLAY_PREFIX' and trashed = false")
+            .setFields("files(id, name)")
+            .execute().files
+        val best = HashMap<Int, Pair<Int, String>>()  // week -> (version, fileId)
+        for (f in files) {
+            val m = rx.matchEntire(f.name) ?: continue
+            val week = m.groupValues[1].toInt()
+            val ver = m.groupValues[2].toIntOrNull() ?: 0
+            val cur = best[week]
+            if (cur == null || ver > cur.first) best[week] = ver to f.id
+        }
+        return best.mapValues { (_, v) -> downloadById(drive, v.second) }
+    }
+
+    /**
+     * Base training_data*.js with any per-week overlays folded in, returned as a
+     * `const WEEKS=[…]` string identical in shape to the monolithic file. An
+     * overlay replaces a week only when the base week is still `planned`: once a
+     * week is `current`/`actual` the live Strava data owns it, so a stale future
+     * plan can never mask real activities. Falls back to the raw base when no
+     * overlays apply.
+     */
+    private fun readAssembledTrainingData(drive: Drive): String {
+        val baseJs = readLatestTrainingData(drive)
+        val overlays = runCatching { readWeekOverlays(drive) }.getOrDefault(emptyMap())
+        if (overlays.isEmpty()) return baseJs
+        val weeks = CompareRenderer.parseWeeks(baseJs)
+        var applied = 0
+        for (i in 0 until weeks.length()) {
+            val w = weeks.getJSONObject(i)
+            if (w.optString("status") != "planned") continue  // live data owns actual/current weeks
+            val ov = overlays[w.optInt("n", -1)] ?: continue
+            val obj = runCatching {
+                org.json.JSONObject(ov.substring(ov.indexOf('{'), ov.lastIndexOf('}') + 1))
+            }.getOrNull() ?: continue
+            weeks.put(i, obj)
+            applied++
+        }
+        return if (applied == 0) baseJs else "// AUTO-GENERATED\n\nconst WEEKS = $weeks;\n"
+    }
+
     /** Reads the latest coach_notes*.json overlay, or null when none exists. */
     private fun readLatestCoachNotes(drive: Drive): String? =
         latestVersionId(drive, COACH_NOTES_BASE, "json")?.let { downloadById(drive, it) }
@@ -137,7 +194,7 @@ class DriveService(private val context: Context) {
     suspend fun fetchTrainingHtml(): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val drive = buildDrive() ?: error("Not signed in to Google")
-            val dataJs = readLatestTrainingData(drive)
+            val dataJs = readAssembledTrainingData(drive)
             // Coach analysis lives in a separate, assistant-maintained overlay so
             // it never collides with the Strava-driven training data; the template
             // merges it into each activity/week before rendering.
@@ -169,7 +226,7 @@ class DriveService(private val context: Context) {
         withContext(Dispatchers.IO) {
             runCatching {
                 val drive = buildDrive() ?: error("Not signed in to Google")
-                val dataJs = readLatestTrainingData(drive)
+                val dataJs = readAssembledTrainingData(drive)
                 val compareJson = readLatestCompareNotes(drive)
                 // Fold the overlay into the checksum so refreshed insights also
                 // trigger a rewrite, not just changed training data.
