@@ -26,6 +26,7 @@ import com.google.android.gms.common.api.Scope
 import com.google.api.services.drive.DriveScopes
 import com.vibetraining.assistant.data.DriveService
 import com.vibetraining.assistant.data.PreferencesManager
+import com.vibetraining.assistant.data.WeekSummary
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,21 +43,52 @@ fun TrainingScreen(onBack: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
     var firing by remember { mutableStateOf(false) }
+    var showEndWeek by remember { mutableStateOf(false) }
+    var loadingWeeks by remember { mutableStateOf(false) }
+    var weekOptions by remember { mutableStateOf<List<WeekSummary>>(emptyList()) }
+    var selectedWeek by remember { mutableStateOf<Int?>(null) }
+    var guidelines by remember { mutableStateOf("") }
 
-    // Fires the coaching Routine to rate newly logged runs/weeks; the new ratings
-    // land in the coach_notes overlay and show on next reload.
-    fun runCoachReview() {
+    // Opens the "End week" dialog, loading the week list so the athlete can
+    // confirm which week they're closing (defaults to the current week).
+    fun openEndWeek() {
+        if (firing) return
+        guidelines = ""
+        showEndWeek = true
+        loadingWeeks = true
+        scope.launch {
+            driveService.readWeekSummaries().fold(
+                onSuccess = { list ->
+                    weekOptions = list
+                    selectedWeek = (list.firstOrNull { it.status == "current" }
+                        ?: list.lastOrNull { it.status != "planned" }
+                        ?: list.lastOrNull())?.n
+                },
+                onFailure = {
+                    snackbar.showSnackbar("Couldn't load weeks — ${it.message}")
+                    showEndWeek = false
+                }
+            )
+            loadingWeeks = false
+        }
+    }
+
+    // Saves the week's guidelines to Drive and fires the coach to evaluate the
+    // closed week and replan the upcoming weeks.
+    fun submitEndWeek() {
+        val wk = selectedWeek ?: return
         if (firing) return
         firing = true
+        showEndWeek = false
         scope.launch {
-            driveService.triggerCoaching(
-                prefs?.coachFireUrl.orEmpty(), prefs?.coachFireToken.orEmpty(),
-                "Run the coaching review now: rate newly logged runs and any unanalysed completed weeks."
+            driveService.endWeek(
+                wk, guidelines,
+                prefs?.coachFireUrl.orEmpty(), prefs?.coachFireToken.orEmpty()
             ).fold(
                 onSuccess = {
-                    snackbar.showSnackbar("Coach review started — reload in a moment to see new ratings.")
+                    snackbar.showSnackbar("Week $wk closed — coach is evaluating & replanning. Reload shortly.")
                 },
-                onFailure = { snackbar.showSnackbar("Couldn't start coach review — ${it.message}") }
+                onFailure = { snackbar.showSnackbar("Couldn't close the week — ${it.message}") }
             )
             firing = false
         }
@@ -117,8 +149,8 @@ fun TrainingScreen(onBack: () -> Unit) {
                     IconButton(onClick = { loadOrSignIn() }, enabled = !loading) {
                         Icon(Icons.Default.Refresh, contentDescription = "Reload")
                     }
-                    TextButton(onClick = { runCoachReview() }, enabled = !firing) {
-                        Text(if (firing) "…" else "Coach")
+                    TextButton(onClick = { openEndWeek() }, enabled = !firing) {
+                        Text(if (firing) "…" else "End week")
                     }
                 }
             )
@@ -137,8 +169,90 @@ fun TrainingScreen(onBack: () -> Unit) {
                 }
                 htmlContent != null -> HtmlWebView(html = htmlContent!!)
             }
+            if (showEndWeek) {
+                EndWeekDialog(
+                    weeks = weekOptions,
+                    selectedWeek = selectedWeek,
+                    onSelectWeek = { selectedWeek = it },
+                    guidelines = guidelines,
+                    onGuidelines = { guidelines = it },
+                    loading = loadingWeeks,
+                    onConfirm = { submitEndWeek() },
+                    onDismiss = { showEndWeek = false }
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun EndWeekDialog(
+    weeks: List<WeekSummary>,
+    selectedWeek: Int?,
+    onSelectWeek: (Int) -> Unit,
+    guidelines: String,
+    onGuidelines: (String) -> Unit,
+    loading: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val sel = weeks.firstOrNull { it.n == selectedWeek }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("End week") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (loading) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Loading weeks…")
+                    }
+                } else {
+                    Text("Which week are you closing?", style = MaterialTheme.typography.titleSmall)
+                    Box {
+                        OutlinedButton(
+                            onClick = { menuOpen = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(sel?.let { "Week ${it.n} · ${it.dates}" } ?: "Select a week")
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            weeks.forEach { w ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text("Week ${w.n} · ${w.dates}" +
+                                            if (w.status == "current") "  • current" else "")
+                                    },
+                                    onClick = { onSelectWeek(w.n); menuOpen = false }
+                                )
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = guidelines,
+                        onValueChange = onGuidelines,
+                        label = { Text("Guidelines for next week (optional)") },
+                        placeholder = { Text("e.g. traveling Mon–Wed, keep it flat, foot still tender") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3
+                    )
+                    Text(
+                        "The coach will evaluate this week and replan the next few, using these notes plus its own read of your runs.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = !loading && selectedWeek != null) {
+                Text("Close week & replan")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @SuppressLint("SetJavaScriptEnabled")
