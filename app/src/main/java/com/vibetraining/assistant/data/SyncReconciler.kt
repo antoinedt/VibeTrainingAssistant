@@ -33,8 +33,9 @@ object SyncReconciler {
         "race-r" to "Race"
     )
 
-    /** 1–10 perceived-difficulty (RPE) descriptions; index 0 == level 1. */
-    val DIFFICULTY = listOf(
+    /** 1–10 cardio/breathing intensity (RPE) descriptions; index 0 == level 1.
+     *  This is the "how hard was the breathing" axis — distinct from EFFORT. */
+    val INTENSITY = listOf(
         "Very easy — recovery, could go all day",
         "Easy — comfortable, full conversation",
         "Moderate — steady, breathing slightly up",
@@ -45,6 +46,23 @@ object SyncReconciler {
         "Very hard — near threshold, can't talk",
         "Extremely hard — almost maximal",
         "Maximal — all-out, couldn't sustain"
+    )
+
+    /** 1–10 overall effort/difficulty; index 0 == level 1. The "how hard on the
+     *  legs / how tough overall given fatigue" axis, independent of breathing —
+     *  e.g. an easy-breathing 25 km can still be a high-effort day, and an easy
+     *  5 km can feel hard when you're tired from the day before. */
+    val EFFORT = listOf(
+        "Trivial — felt completely fresh",
+        "Very easy — legs light, no effort",
+        "Easy — comfortable, legs fine",
+        "Moderate — some work, still easy",
+        "Noticeable — legs working, manageable",
+        "Hard — legs loaded, took real focus",
+        "Tough — legs heavy, having to push",
+        "Very tough — grinding, legs really tired",
+        "Brutal — barely holding form",
+        "Maximal — everything I had"
     )
 
     /** 1–10 injury/pain scale; 1 == fully healthy, 10 == badly hurt. */
@@ -62,7 +80,8 @@ object SyncReconciler {
     )
 
     data class RunFeedback(
-        val difficulty: Int,
+        val intensity: Int,
+        val effort: Int,
         val injury: Int,
         val injuryComment: String,
         val recap: String
@@ -245,8 +264,10 @@ object SyncReconciler {
         o.put("flags", JSONArray())
         o.put("strava_id", activity.id)
         if (feedback != null) {
-            o.put("difficulty", feedback.difficulty)
-            o.put("difficultyLabel", DIFFICULTY[feedback.difficulty - 1])
+            o.put("intensity", feedback.intensity)
+            o.put("intensityLabel", INTENSITY[feedback.intensity - 1])
+            o.put("effort", feedback.effort)
+            o.put("effortLabel", EFFORT[feedback.effort - 1])
             o.put("injury", feedback.injury)
             o.put("injuryLabel", INJURY[feedback.injury - 1])
             if (feedback.injuryComment.isNotBlank()) o.put("injuryComment", feedback.injuryComment.trim())
@@ -259,7 +280,8 @@ object SyncReconciler {
     /** A human-readable Athlete-Notes string (the athlete's own input) shown in
      *  the log popup. The separate `notes` field is reserved for coach notes. */
     private fun buildAthleteNotes(f: RunFeedback): String = buildString {
-        append("Difficulty ${f.difficulty}/10 — ${DIFFICULTY[f.difficulty - 1]}\n")
+        append("Intensity ${f.intensity}/10 — ${INTENSITY[f.intensity - 1]}\n")
+        append("Effort ${f.effort}/10 — ${EFFORT[f.effort - 1]}\n")
         append("Injury ${f.injury}/10 — ${INJURY[f.injury - 1]}")
         if (f.injuryComment.isNotBlank()) append(" (${f.injuryComment.trim()})")
         if (f.recap.isNotBlank()) append("\n\n${f.recap.trim()}")
@@ -311,7 +333,10 @@ object SyncReconciler {
     private val WEEK_KEY_ORDER = listOf("n", "dates", "phase", "status", "runKm", "longKm", "acts")
     private val ACT_KEY_ORDER = listOf(
         "d", "ic", "cls", "nm", "km", "sub", "flags", "desc", "strava_id", "notes", "athleteNotes",
-        "difficulty", "difficultyLabel", "injury", "injuryLabel", "injuryComment", "recap"
+        "intensity", "intensityLabel", "effort", "effortLabel",
+        // legacy single-axis fields, kept so older logged runs pass through unchanged
+        "difficulty", "difficultyLabel",
+        "injury", "injuryLabel", "injuryComment", "recap"
     )
 
     private fun childOrder(key: String): List<String> =

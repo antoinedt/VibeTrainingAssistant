@@ -24,6 +24,10 @@ private const val TRAINING_DATA_NAME = "training_data.js"
 // read time for the view paths so a single week can be revised by uploading one
 // small file. See readWeekOverlays / readAssembledTrainingData.
 private const val WEEK_OVERLAY_PREFIX = "week_"
+// Per-week athlete input written when a week is closed ("End week"): the coach
+// reads week_input_<n>.json as its own guidance channel, separate from the
+// Strava-driven training data and the coach's own notes.
+private const val WEEK_INPUT_BASE = "week_input"
 
 // On-demand coaching: the app fires a Claude Code Routine through its per-routine
 // /fire endpoint. The URL and bearer token live in this small JSON file in the
@@ -42,6 +46,9 @@ private const val COACH_DATA_PLACEHOLDER = "__COACH_DATA__"
 /** Outcome of opening the Compare screen: the HTML to render plus whether the
  *  insights were freshly generated and written back to Drive. */
 data class CompareResult(val html: String, val regenerated: Boolean)
+
+/** Lightweight week descriptor for the "End week" picker. */
+data class WeekSummary(val n: Int, val dates: String, val status: String)
 
 class DriveService(private val context: Context) {
 
@@ -298,6 +305,55 @@ class DriveService(private val context: Context) {
                 postFire(u, t, x.ifBlank { "Run the coaching review now." })
             }
         }
+
+    /** Weeks (number, dates, status) parsed from the live training data, for the
+     *  "End week" picker. Ordered as stored (chronological). */
+    suspend fun readWeekSummaries(): Result<List<WeekSummary>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val drive = buildDrive() ?: error("Not signed in to Google")
+            val weeks = CompareRenderer.parseWeeks(readAssembledTrainingData(drive))
+            (0 until weeks.length()).map { i ->
+                val w = weeks.getJSONObject(i)
+                WeekSummary(w.optInt("n", i + 1), w.optString("dates"), w.optString("status"))
+            }
+        }
+    }
+
+    /**
+     * Closes a week: writes the athlete's next-week guidelines to
+     * `week_input_<n>.json` in Drive (overwriting any prior close of the same
+     * week), then fires the coaching Routine to evaluate the week and replan the
+     * upcoming weeks. Returns the new coaching session URL (or "started").
+     */
+    suspend fun endWeek(
+        week: Int,
+        guidelines: String,
+        url: String = "",
+        token: String = ""
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val drive = buildDrive() ?: error("Not signed in to Google")
+            val payload = org.json.JSONObject()
+                .put("week", week)
+                .put("guidelines", guidelines.trim())
+                .put("closedAt", java.time.Instant.now().toString())
+            uploadText(drive, "${WEEK_INPUT_BASE}_$week.json", payload.toString(2), "application/json")
+            triggerCoaching(url, token, endWeekTask(week)).getOrThrow()
+        }
+    }
+
+    /** Task handed to the coaching Routine when a week is closed. */
+    private fun endWeekTask(week: Int): String =
+        "The athlete just closed week $week of the Berlin build. " +
+        "1) Read week_input_$week.json in the Drive training folder for their guidelines for the coming weeks. " +
+        "2) Read the latest training_data (including this week's logged runs — note the new intensity vs effort " +
+        "split, plus injury ratings and recaps) and the latest coach_notes overlay. " +
+        "3) Evaluate week $week: write a week rating, analysis and updated goal probabilities into a new " +
+        "coach_notes overlay version in Drive. " +
+        "4) Replan the next ~3–4 upcoming planned weeks in a new training_data version, weighing the athlete's " +
+        "guidelines together with your own evaluation (fatigue, the intensity/effort gap, injury signals). " +
+        "Keep the peak/taper periodization and the race date intact unless something clearly warrants a change. " +
+        "Apply the changes directly by writing the new files."
 
     private fun postFire(url: String, token: String, text: String): String {
         val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {

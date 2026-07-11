@@ -17,7 +17,7 @@ import com.vibetraining.assistant.data.StravaActivity
 import com.vibetraining.assistant.data.SyncReconciler
 import org.json.JSONArray
 
-private enum class Step { Match, Type, Difficulty, Injury, Recap }
+private enum class Step { Match, Type, Intensity, Effort, Injury, Recap }
 
 /** Sentinel selection in the match picker for "no matching plan". */
 private const val OTHER = -1
@@ -41,7 +41,8 @@ fun SyncReconcileDialog(
     var cls by remember { mutableStateOf<String?>(null) }
     var matchSel by remember { mutableIntStateOf(Int.MIN_VALUE) }
     var typeSel by remember { mutableStateOf<String?>(null) }
-    var difficulty by remember { mutableIntStateOf(0) }
+    var intensity by remember { mutableIntStateOf(0) }
+    var effort by remember { mutableIntStateOf(0) }
     var injury by remember { mutableIntStateOf(0) }
     var injuryComment by remember { mutableStateOf("") }
     var recap by remember { mutableStateOf("") }
@@ -58,7 +59,7 @@ fun SyncReconcileDialog(
     fun resetDraft() {
         step = Step.Match; matchedIndex = null; cls = null
         matchSel = Int.MIN_VALUE; typeSel = null
-        difficulty = 0; injury = 0; injuryComment = ""; recap = ""
+        intensity = 0; effort = 0; injury = 0; injuryComment = ""; recap = ""
     }
 
     fun commitAndNext(feedback: SyncReconciler.RunFeedback?) {
@@ -114,9 +115,22 @@ fun SyncReconcileDialog(
                                 }
                             }
                         }
-                        Step.Difficulty -> {
-                            Text("How hard did it feel? (1–10)", style = MaterialTheme.typography.titleSmall)
-                            ScaleList(SyncReconciler.DIFFICULTY, difficulty) { difficulty = it }
+                        Step.Intensity -> {
+                            Text("Intensity — how hard was the breathing? (1–10)",
+                                style = MaterialTheme.typography.titleSmall)
+                            Text("Cardio effort only, ignore the legs.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            ScaleList(SyncReconciler.INTENSITY, intensity) { intensity = it }
+                        }
+                        Step.Effort -> {
+                            Text("Effort — how hard overall? (1–10)",
+                                style = MaterialTheme.typography.titleSmall)
+                            Text("Legs, fatigue, how tough it felt given how you came in — " +
+                                "e.g. an easy-breathing long run can still be high effort.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            ScaleList(SyncReconciler.EFFORT, effort) { effort = it }
                         }
                         Step.Injury -> {
                             Text("Injury / pain status (1–10)", style = MaterialTheme.typography.titleSmall)
@@ -159,7 +173,7 @@ fun SyncReconcileDialog(
                                 val opt = pending[matchSel]
                                 matchedIndex = opt.index
                                 cls = opt.cls
-                                if (isRun) step = Step.Difficulty else commitAndNext(null)
+                                if (isRun) step = Step.Intensity else commitAndNext(null)
                             }
                         },
                         secondaryLabel = "Skip",
@@ -173,30 +187,37 @@ fun SyncReconcileDialog(
                     Step.Type -> StepButtons(
                         primaryLabel = "Continue",
                         primaryEnabled = typeSel != null,
-                        onPrimary = { cls = typeSel; step = Step.Difficulty },
+                        onPrimary = { cls = typeSel; step = Step.Intensity },
                         secondaryLabel = "Back",
                         onSecondary = { step = Step.Match }
                     )
-                    Step.Difficulty -> StepButtons(
+                    Step.Intensity -> StepButtons(
                         primaryLabel = "Continue",
-                        primaryEnabled = difficulty > 0,
-                        onPrimary = { step = Step.Injury },
+                        primaryEnabled = intensity > 0,
+                        onPrimary = { step = Step.Effort },
                         secondaryLabel = "Back",
                         onSecondary = { step = if (matchedIndex == null) Step.Type else Step.Match }
+                    )
+                    Step.Effort -> StepButtons(
+                        primaryLabel = "Continue",
+                        primaryEnabled = effort > 0,
+                        onPrimary = { step = Step.Injury },
+                        secondaryLabel = "Back",
+                        onSecondary = { step = Step.Intensity }
                     )
                     Step.Injury -> StepButtons(
                         primaryLabel = "Continue",
                         primaryEnabled = injury > 0,
                         onPrimary = { step = Step.Recap },
                         secondaryLabel = "Back",
-                        onSecondary = { step = Step.Difficulty }
+                        onSecondary = { step = Step.Effort }
                     )
                     Step.Recap -> StepButtons(
                         primaryLabel = if (index + 1 < activities.size) "Save & next" else "Save & finish",
                         primaryEnabled = true,
                         onPrimary = {
                             commitAndNext(
-                                SyncReconciler.RunFeedback(difficulty, injury, injuryComment, recap)
+                                SyncReconciler.RunFeedback(intensity, effort, injury, injuryComment, recap)
                             )
                         },
                         secondaryLabel = "Back",
