@@ -263,18 +263,86 @@ object SyncReconciler {
         }
         o.put("flags", JSONArray())
         o.put("strava_id", activity.id)
-        if (feedback != null) {
-            o.put("intensity", feedback.intensity)
-            o.put("intensityLabel", INTENSITY[feedback.intensity - 1])
-            o.put("effort", feedback.effort)
-            o.put("effortLabel", EFFORT[feedback.effort - 1])
-            o.put("injury", feedback.injury)
-            o.put("injuryLabel", INJURY[feedback.injury - 1])
-            if (feedback.injuryComment.isNotBlank()) o.put("injuryComment", feedback.injuryComment.trim())
-            if (feedback.recap.isNotBlank()) o.put("recap", feedback.recap.trim())
-            o.put("athleteNotes", buildAthleteNotes(feedback))
-        }
+        if (feedback != null) putFeedback(o, feedback)
         return o
+    }
+
+    /**
+     * Writes an activity's athlete feedback (both perceived-effort axes, injury
+     * and recap) onto [o], regenerating the human-readable athleteNotes and
+     * clearing any legacy single-axis `difficulty` fields. Shared by the initial
+     * sync ([buildAct]) and later edits ([updateFeedback]).
+     */
+    private fun putFeedback(o: JSONObject, f: RunFeedback) {
+        o.put("intensity", f.intensity)
+        o.put("intensityLabel", INTENSITY[f.intensity - 1])
+        o.put("effort", f.effort)
+        o.put("effortLabel", EFFORT[f.effort - 1])
+        o.put("injury", f.injury)
+        o.put("injuryLabel", INJURY[f.injury - 1])
+        if (f.injuryComment.isNotBlank()) o.put("injuryComment", f.injuryComment.trim())
+        else o.remove("injuryComment")
+        if (f.recap.isNotBlank()) o.put("recap", f.recap.trim()) else o.remove("recap")
+        o.put("athleteNotes", buildAthleteNotes(f))
+        // Drop the pre-split single-axis fields so an edited run carries only the
+        // current intensity/effort model.
+        o.remove("difficulty")
+        o.remove("difficultyLabel")
+    }
+
+    private fun actById(weeks: JSONArray, stravaId: Long): JSONObject? {
+        for (i in 0 until weeks.length()) {
+            val acts = weeks.getJSONObject(i).optJSONArray("acts") ?: continue
+            for (j in 0 until acts.length()) {
+                val a = acts.getJSONObject(j)
+                if (a.optLong("strava_id", 0L) == stravaId) return a
+            }
+        }
+        return null
+    }
+
+    /**
+     * The athlete's currently-stored feedback for a logged activity, for
+     * pre-filling the edit UI. Legacy runs that predate the effort split fall
+     * back to the old single-axis `difficulty` for both intensity and effort.
+     * Returns null when the id isn't found.
+     */
+    fun feedbackFor(weeks: JSONArray, stravaId: Long): RunFeedback? {
+        val a = actById(weeks, stravaId) ?: return null
+        val legacy = a.optInt("difficulty", 0)
+        return RunFeedback(
+            intensity = a.optInt("intensity", legacy),
+            effort = a.optInt("effort", legacy),
+            injury = a.optInt("injury", 0),
+            injuryComment = a.optString("injuryComment", ""),
+            recap = a.optString("recap", "")
+        )
+    }
+
+    /** A logged activity's display name and "day · Week n" subtitle, for the edit
+     *  dialog header. Returns null when the id isn't found. */
+    fun labelFor(weeks: JSONArray, stravaId: Long): Pair<String, String>? {
+        for (i in 0 until weeks.length()) {
+            val w = weeks.getJSONObject(i)
+            val acts = w.optJSONArray("acts") ?: continue
+            for (j in 0 until acts.length()) {
+                val a = acts.getJSONObject(j)
+                if (a.optLong("strava_id", 0L) != stravaId) continue
+                val name = a.optString("nm", "Activity")
+                val sub = listOf(a.optString("d", ""), "Week ${w.optInt("n", i + 1)}")
+                    .filter { it.isNotBlank() }.joinToString(" · ")
+                return name to sub
+            }
+        }
+        return null
+    }
+
+    /** Overwrites a logged activity's feedback in place. Returns true if the
+     *  activity was found and updated. Volume totals are unaffected. */
+    fun updateFeedback(weeks: JSONArray, stravaId: Long, feedback: RunFeedback): Boolean {
+        val a = actById(weeks, stravaId) ?: return false
+        putFeedback(a, feedback)
+        return true
     }
 
     /** A human-readable Athlete-Notes string (the athlete's own input) shown in

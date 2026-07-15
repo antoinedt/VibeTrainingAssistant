@@ -1,7 +1,11 @@
 package com.vibetraining.assistant.ui.screens
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -26,8 +30,23 @@ import com.google.android.gms.common.api.Scope
 import com.google.api.services.drive.DriveScopes
 import com.vibetraining.assistant.data.DriveService
 import com.vibetraining.assistant.data.PreferencesManager
+import com.vibetraining.assistant.data.StravaActivity
+import com.vibetraining.assistant.data.StravaAuthBus
+import com.vibetraining.assistant.data.StravaService
+import com.vibetraining.assistant.data.SyncReconciler
 import com.vibetraining.assistant.data.WeekSummary
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import java.time.LocalDate
+
+/** The activity being edited: its Strava id, header text and current feedback. */
+private data class EditTarget(
+    val stravaId: Long,
+    val title: String,
+    val subtitle: String,
+    val initial: SyncReconciler.RunFeedback
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled")
@@ -39,9 +58,12 @@ fun TrainingScreen(onBack: () -> Unit) {
     val prefs by prefsManager.preferences.collectAsState(initial = null)
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+
     var htmlContent by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+
+    // End-week flow.
     var firing by remember { mutableStateOf(false) }
     var showEndWeek by remember { mutableStateOf(false) }
     var loadingWeeks by remember { mutableStateOf(false) }
@@ -49,8 +71,248 @@ fun TrainingScreen(onBack: () -> Unit) {
     var selectedWeek by remember { mutableStateOf<Int?>(null) }
     var guidelines by remember { mutableStateOf("") }
 
-    // Opens the "End week" dialog, loading the week list so the athlete can
-    // confirm which week they're closing (defaults to the current week).
+    // Manual Strava sync flow (moved off Home — no longer automatic).
+    var syncState by remember { mutableStateOf<SyncState>(SyncState.Idle) }
+    var reconcileActivities by remember { mutableStateOf<List<StravaActivity>?>(null) }
+    var reconcileWeeks by remember { mutableStateOf<JSONArray?>(null) }
+    var reconcileOriginal by remember { mutableStateOf("") }
+    var pendingAuthAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var pendingConsent by remember { mutableStateOf<Intent?>(null) }
+    var afterConsent by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    // Activity rating/notes editing.
+    var editTarget by remember { mutableStateOf<EditTarget?>(null) }
+    var editSaving by remember { mutableStateOf(false) }
+
+    val syncing = syncState is SyncState.Loading || reconcileActivities != null
+    val busy = loading || syncing || firing
+
+    fun loadHtml() {
+        scope.launch {
+            loading = true
+            driveService.fetchTrainingHtml().fold(
+                onSuccess = { htmlContent = it; error = null },
+                onFailure = { error = it.message }
+            )
+            loading = false
+        }
+    }
+
+    // Refresh the log in place after a sync or an edit (keeps the current view if
+    // the fetch fails rather than dropping to the error screen).
+    fun reloadHtml() {
+        scope.launch {
+            driveService.fetchTrainingHtml().fold(
+                onSuccess = { htmlContent = it; error = null },
+                onFailure = { snackbar.showSnackbar("Couldn't reload — ${describe(it)}") }
+            )
+        }
+    }
+
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        val action = pendingAuthAction
+        pendingAuthAction = null
+        if (task.isSuccessful) {
+            action?.invoke()
+        } else {
+            val code = (task.exception as? ApiException)?.statusCode
+            error = "Google sign-in failed" +
+                (code?.let { " (code $it: ${GoogleSignInStatusCodes.getStatusCodeString(it)})" } ?: "")
+        }
+    }
+
+    fun ensureSignIn(then: () -> Unit) {
+        if (driveService.isSignedIn()) {
+            then()
+        } else {
+            pendingAuthAction = then
+            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestEmail()
+                .requestScopes(Scope(DriveScopes.DRIVE))
+                .build()
+            googleSignInLauncher.launch(GoogleSignIn.getClient(context, gso).signInIntent)
+        }
+    }
+
+    fun loadOrSignIn() = ensureSignIn { loadHtml() }
+
+    // Pulls activities from Strava, diffs them against the Drive log, and hands
+    // any new ones to the reconciliation wizard. Assumes Google is signed in.
+    fun runSync() {
+        scope.launch {
+            var stage = "starting"
+            try {
+                val p = prefs ?: return@launch
+                val clientId = p.stravaClientId
+                val clientSecret = p.stravaClientSecret
+                var accessToken = p.stravaAccessToken
+                val nowSec = System.currentTimeMillis() / 1000
+
+                if (p.stravaRefreshToken.isBlank()) {
+                    stage = "Strava authorization"
+                    syncState = SyncState.Loading("Authorizing with Strava…")
+                    while (StravaAuthBus.codes.tryReceive().isSuccess) { /* drain stale codes */ }
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(StravaService.authorizeUrl(clientId)))
+                    )
+                    val code = withTimeoutOrNull(180_000) { StravaAuthBus.codes.receive() }
+                    if (code.isNullOrBlank()) error("Strava authorization was cancelled or timed out.")
+                    val tokens = StravaService.exchangeCode(clientId, clientSecret, code)
+                    prefsManager.saveStravaTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAt)
+                    accessToken = tokens.accessToken
+                } else if (p.stravaExpiresAt - 60 <= nowSec) {
+                    stage = "refreshing Strava session"
+                    syncState = SyncState.Loading("Refreshing Strava session…")
+                    val tokens = StravaService.refresh(clientId, clientSecret, p.stravaRefreshToken)
+                    prefsManager.saveStravaTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAt)
+                    accessToken = tokens.accessToken
+                }
+
+                stage = "fetching activities from Strava"
+                syncState = SyncState.Loading("Fetching activities from Strava…")
+                val activities = StravaService.listActivities(accessToken)
+
+                stage = "reading training log from Drive"
+                syncState = SyncState.Loading("Reading training log…")
+                val original = driveService.downloadTrainingDataText().getOrThrow()
+                stage = "parsing training log"
+                val weeks = SyncReconciler.parseWeeks(original)
+                val known = SyncReconciler.existingStravaIds(weeks)
+                val fresh = activities
+                    .filter { it.id !in known }
+                    .sortedBy { it.startDateLocal }
+
+                if (fresh.isEmpty()) {
+                    syncState = SyncState.Success("No new activities. Training log is up to date.")
+                } else {
+                    reconcileOriginal = original
+                    reconcileWeeks = weeks
+                    reconcileActivities = fresh
+                    syncState = SyncState.Idle
+                }
+            } catch (e: Exception) {
+                val consent = recoverableConsentIntent(e)
+                if (consent != null) {
+                    afterConsent = { runSync() }
+                    syncState = SyncState.Loading("Waiting for Google Drive permission…")
+                    pendingConsent = consent
+                } else {
+                    syncState = SyncState.Error("Sync failed while $stage — ${describe(e)}")
+                }
+            }
+        }
+    }
+
+    val consentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val retry = afterConsent
+            afterConsent = null
+            (retry ?: { runSync() }).invoke()
+        } else {
+            afterConsent = null
+            syncState = SyncState.Error(
+                "Google Drive access was declined. Tap Sync again to retry."
+            )
+        }
+    }
+
+    LaunchedEffect(pendingConsent) {
+        pendingConsent?.let { intent ->
+            pendingConsent = null
+            consentLauncher.launch(intent)
+        }
+    }
+
+    fun startSync() {
+        if (syncing) return
+        if (prefs?.stravaClientId.isNullOrBlank() || prefs?.stravaClientSecret.isNullOrBlank()) {
+            scope.launch { snackbar.showSnackbar("Add your Strava keys in Settings first.") }
+            return
+        }
+        syncState = SyncState.Idle
+        ensureSignIn { runSync() }
+    }
+
+    // Once every new activity has been processed, normalize and write back to
+    // Drive, then refresh the log. (Coaching is triggered from "End week", not
+    // from every sync.)
+    fun finishReconcile() {
+        val weeks = reconcileWeeks
+        val original = reconcileOriginal
+        val count = reconcileActivities.orEmpty().size
+        reconcileActivities = null
+        reconcileWeeks = null
+        if (weeks == null) return
+        scope.launch {
+            try {
+                syncState = SyncState.Loading("Saving training log to Drive…")
+                val today = LocalDate.now()
+                SyncReconciler.cleanPastPending(weeks, today)
+                SyncReconciler.normalizeStatuses(weeks, today)
+                val text = SyncReconciler.serialize(original, weeks)
+                val saved = driveService.saveTrainingDataText(text)
+                if (saved.isFailure) {
+                    syncState = SyncState.Error("Drive save failed — ${describe(saved.exceptionOrNull())}")
+                    return@launch
+                }
+                val s = if (count == 1) "activity" else "activities"
+                syncState = SyncState.Success("Training log updated · $count new $s logged.")
+                reloadHtml()
+            } catch (e: Exception) {
+                syncState = SyncState.Error("Saving failed — ${describe(e)}")
+            }
+        }
+    }
+
+    // Bridge target: the WebView's Edit button hands us a Strava id; we pull the
+    // current feedback from Drive and open the edit dialog pre-filled.
+    fun onEditActivity(stravaId: Long) {
+        if (editSaving || editTarget != null) return
+        scope.launch {
+            try {
+                val original = driveService.downloadTrainingDataText().getOrThrow()
+                val weeks = SyncReconciler.parseWeeks(original)
+                val fb = SyncReconciler.feedbackFor(weeks, stravaId)
+                val label = SyncReconciler.labelFor(weeks, stravaId)
+                if (fb == null || label == null) {
+                    snackbar.showSnackbar("Couldn't find that activity to edit.")
+                    return@launch
+                }
+                editTarget = EditTarget(stravaId, label.first, label.second, fb)
+            } catch (e: Exception) {
+                snackbar.showSnackbar("Couldn't open the editor — ${describe(e)}")
+            }
+        }
+    }
+
+    fun saveEdit(feedback: SyncReconciler.RunFeedback) {
+        val target = editTarget ?: return
+        scope.launch {
+            editSaving = true
+            try {
+                val original = driveService.downloadTrainingDataText().getOrThrow()
+                val weeks = SyncReconciler.parseWeeks(original)
+                if (!SyncReconciler.updateFeedback(weeks, target.stravaId, feedback)) {
+                    snackbar.showSnackbar("That activity is no longer in the log.")
+                } else {
+                    val text = SyncReconciler.serialize(original, weeks)
+                    driveService.saveTrainingDataText(text).getOrThrow()
+                    editTarget = null
+                    reloadHtml()
+                    snackbar.showSnackbar("Ratings updated.")
+                }
+            } catch (e: Exception) {
+                snackbar.showSnackbar("Couldn't save — ${describe(e)}")
+            }
+            editSaving = false
+        }
+    }
+
     fun openEndWeek() {
         if (firing) return
         guidelines = ""
@@ -73,8 +335,6 @@ fun TrainingScreen(onBack: () -> Unit) {
         }
     }
 
-    // Saves the week's guidelines to Drive and fires the coach to evaluate the
-    // closed week and replan the upcoming weeks.
     fun submitEndWeek() {
         val wk = selectedWeek ?: return
         if (firing) return
@@ -94,46 +354,16 @@ fun TrainingScreen(onBack: () -> Unit) {
         }
     }
 
-    val signInLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
-        if (task.isSuccessful) {
-            scope.launch {
-                loading = true
-                driveService.fetchTrainingHtml().fold(
-                    onSuccess = { htmlContent = it },
-                    onFailure = { error = it.message }
-                )
-                loading = false
-            }
-        } else {
-            val code = (task.exception as? ApiException)?.statusCode
-            error = "Google sign-in failed" +
-                (code?.let { " (code $it: ${GoogleSignInStatusCodes.getStatusCodeString(it)})" } ?: "")
-        }
-    }
-
-    fun loadOrSignIn() {
-        if (driveService.isSignedIn()) {
-            scope.launch {
-                loading = true
-                driveService.fetchTrainingHtml().fold(
-                    onSuccess = { htmlContent = it },
-                    onFailure = { error = it.message }
-                )
-                loading = false
-            }
-        } else {
-            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-                .requestEmail()
-                .requestScopes(Scope(DriveScopes.DRIVE))
-                .build()
-            signInLauncher.launch(GoogleSignIn.getClient(context, gso).signInIntent)
-        }
-    }
-
     LaunchedEffect(Unit) { loadOrSignIn() }
+
+    // Surface sync progress/results as snackbars so the WebView stays visible.
+    LaunchedEffect(syncState) {
+        when (val s = syncState) {
+            is SyncState.Success -> { snackbar.showSnackbar(s.message); syncState = SyncState.Idle }
+            is SyncState.Error -> { snackbar.showSnackbar(s.message); syncState = SyncState.Idle }
+            else -> {}
+        }
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -146,10 +376,13 @@ fun TrainingScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { loadOrSignIn() }, enabled = !loading) {
+                    IconButton(onClick = { loadOrSignIn() }, enabled = !busy) {
                         Icon(Icons.Default.Refresh, contentDescription = "Reload")
                     }
-                    TextButton(onClick = { openEndWeek() }, enabled = !firing) {
+                    TextButton(onClick = { startSync() }, enabled = !busy) {
+                        Text(if (syncing) "…" else "Sync")
+                    }
+                    TextButton(onClick = { openEndWeek() }, enabled = !firing && !syncing) {
                         Text(if (firing) "…" else "End week")
                     }
                 }
@@ -167,8 +400,14 @@ fun TrainingScreen(onBack: () -> Unit) {
                     Text(error!!, color = MaterialTheme.colorScheme.error)
                     Button(onClick = { error = null; loadOrSignIn() }) { Text("Retry") }
                 }
-                htmlContent != null -> HtmlWebView(html = htmlContent!!)
+                htmlContent != null -> HtmlWebView(html = htmlContent!!, onEditActivity = { onEditActivity(it) })
             }
+
+            // A thin progress line while a sync is in flight (the WebView stays up).
+            if (syncState is SyncState.Loading) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter))
+            }
+
             if (showEndWeek) {
                 EndWeekDialog(
                     weeks = weekOptions,
@@ -182,6 +421,27 @@ fun TrainingScreen(onBack: () -> Unit) {
                 )
             }
         }
+    }
+
+    val toReconcile = reconcileActivities
+    val weeksToReconcile = reconcileWeeks
+    if (toReconcile != null && weeksToReconcile != null) {
+        SyncReconcileDialog(
+            activities = toReconcile,
+            weeks = weeksToReconcile,
+            onFinished = { finishReconcile() }
+        )
+    }
+
+    editTarget?.let { t ->
+        EditActivityDialog(
+            title = t.title,
+            subtitle = t.subtitle,
+            initial = t.initial,
+            saving = editSaving,
+            onSave = { saveEdit(it) },
+            onCancel = { if (!editSaving) editTarget = null }
+        )
     }
 }
 
@@ -257,7 +517,10 @@ private fun EndWeekDialog(
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun HtmlWebView(html: String) {
+fun HtmlWebView(html: String, onEditActivity: (Long) -> Unit = {}) {
+    // Keep the bridge pointed at the latest callback across recompositions even
+    // though the JavascriptInterface is installed once in the factory.
+    val editCb = rememberUpdatedState(onEditActivity)
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
@@ -272,6 +535,15 @@ fun HtmlWebView(html: String) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     settings.forceDark = WebSettings.FORCE_DARK_OFF
                 }
+                addJavascriptInterface(object {
+                    @JavascriptInterface
+                    fun editActivity(stravaId: String) {
+                        val id = stravaId.toLongOrNull() ?: return
+                        // The bridge runs on a WebView worker thread; hop to the UI
+                        // thread before touching Compose state.
+                        post { editCb.value(id) }
+                    }
+                }, "AndroidBridge")
                 loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
             }
         },

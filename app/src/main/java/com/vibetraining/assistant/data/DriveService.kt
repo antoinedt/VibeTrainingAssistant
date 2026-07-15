@@ -43,6 +43,40 @@ private const val COMPARE_ASSET = "training_comparison.html"
 private const val TRAINING_DATA_PLACEHOLDER = "/*__TRAINING_DATA__*/"
 private const val COACH_DATA_PLACEHOLDER = "__COACH_DATA__"
 
+/**
+ * Script injected into the Training Log page at fetch time (not baked into the
+ * Drive template) so an "Edit ratings & notes" button appears in the activity
+ * popup — but only inside the app, where the AndroidBridge is present. It wraps
+ * the template's openPopup to track the current logged run and hands its Strava
+ * id back to native (TrainingScreen.onEditActivity) when tapped. Kept app-side
+ * so the feature ships with the APK and doesn't depend on re-uploading the
+ * Drive-hosted template.
+ */
+private const val EDIT_BUTTON_INJECTION = """
+<script>
+(function(){
+  if(!window.AndroidBridge||!window.AndroidBridge.editActivity) return;
+  if(typeof openPopup!=='function') return;
+  var EDIT_CLS={easy:1,tempo:1,long:1,'race-r':1};
+  var CUR=null;
+  var pop=document.querySelector('#popup .popup');
+  if(!pop) return;
+  var btn=document.createElement('button');
+  btn.textContent='✎ Edit ratings & notes';
+  btn.style.cssText='display:none;width:100%;margin-top:16px;background:#0d1020;border:1px solid #1e2540;border-left:3px solid var(--easy);border-radius:8px;padding:11px 14px;cursor:pointer;color:#a8c0e8;font-size:.82rem;font-weight:700;font-family:inherit;text-align:left;letter-spacing:.3px;';
+  btn.onclick=function(){ if(CUR!=null){ AndroidBridge.editActivity(String(CUR)); document.getElementById('popup').classList.remove('open'); } };
+  pop.appendChild(btn);
+  var orig=openPopup;
+  window.openPopup=function(idx){
+    orig(idx);
+    var e=(typeof ACT_DATA!=='undefined')?ACT_DATA[idx]:null;
+    CUR=(e&&e.a&&e.a.strava_id!=null&&EDIT_CLS[e.a.cls])?e.a.strava_id:null;
+    btn.style.display=(CUR!=null)?'block':'none';
+  };
+})();
+</script>
+"""
+
 /** Outcome of opening the Compare screen: the HTML to render plus whether the
  *  insights were freshly generated and written back to Drive. */
 data class CompareResult(val html: String, val regenerated: Boolean)
@@ -214,9 +248,13 @@ class DriveService(private val context: Context) {
                 ?: error("Missing training_log.html in your Drive folder. Upload the template (with the data placeholder) there to view the Training Log.")
             // Kotlin's String.replace(String, String) is a literal replacement,
             // so '$' or '\' in the data are inserted verbatim.
-            template
+            val page = template
                 .replace(TRAINING_DATA_PLACEHOLDER, dataJs)
                 .replace(COACH_DATA_PLACEHOLDER, coachJson)
+            // Add the in-app edit affordance just before </body> (falls back to
+            // appending if the tag is absent).
+            if (page.contains("</body>")) page.replaceFirst("</body>", "$EDIT_BUTTON_INJECTION</body>")
+            else page + EDIT_BUTTON_INJECTION
         }
     }
 
