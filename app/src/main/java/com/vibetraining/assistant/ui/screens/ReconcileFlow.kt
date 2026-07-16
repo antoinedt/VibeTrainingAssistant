@@ -229,6 +229,130 @@ fun SyncReconcileDialog(
     }
 }
 
+private enum class EditStep { Intensity, Effort, Injury, Recap }
+
+/**
+ * Edits an already-logged activity's ratings and notes. Unlike the sync wizard
+ * there's no match/type step — the activity already exists; this walks the four
+ * feedback axes pre-filled with [initial] and hands the result to [onSave].
+ */
+@Composable
+fun EditActivityDialog(
+    title: String,
+    subtitle: String,
+    initial: SyncReconciler.RunFeedback,
+    saving: Boolean,
+    onSave: (SyncReconciler.RunFeedback) -> Unit,
+    onCancel: () -> Unit
+) {
+    var step by remember { mutableStateOf(EditStep.Intensity) }
+    var intensity by remember { mutableIntStateOf(initial.intensity) }
+    var effort by remember { mutableIntStateOf(initial.effort) }
+    var injury by remember { mutableIntStateOf(initial.injury) }
+    var injuryComment by remember { mutableStateOf(initial.injuryComment) }
+    var recap by remember { mutableStateOf(initial.recap) }
+
+    Dialog(
+        onDismissRequest = { if (!saving) onCancel() },
+        properties = DialogProperties(dismissOnBackPress = !saving, dismissOnClickOutside = false)
+    ) {
+        Card(shape = RoundedCornerShape(20.dp)) {
+            Column(
+                modifier = Modifier.padding(20.dp).heightIn(max = 600.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("Edit ratings & notes", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                HorizontalDivider()
+
+                Column(
+                    modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    when (step) {
+                        EditStep.Intensity -> {
+                            Text("Intensity — how hard was the breathing? (1–10)",
+                                style = MaterialTheme.typography.titleSmall)
+                            Text("Cardio effort only, ignore the legs.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            ScaleList(SyncReconciler.INTENSITY, intensity) { intensity = it }
+                        }
+                        EditStep.Effort -> {
+                            Text("Effort — how hard overall? (1–10)",
+                                style = MaterialTheme.typography.titleSmall)
+                            Text("Legs, fatigue, how tough it felt given how you came in.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            ScaleList(SyncReconciler.EFFORT, effort) { effort = it }
+                        }
+                        EditStep.Injury -> {
+                            Text("Injury / pain status (1–10)", style = MaterialTheme.typography.titleSmall)
+                            Text("1 = fully healthy · 10 = badly hurt",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            ScaleList(SyncReconciler.INJURY, injury) { injury = it }
+                            OutlinedTextField(
+                                value = injuryComment,
+                                onValueChange = { injuryComment = it },
+                                label = { Text("Details (optional)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 2
+                            )
+                        }
+                        EditStep.Recap -> {
+                            Text("Training recap", style = MaterialTheme.typography.titleSmall)
+                            OutlinedTextField(
+                                value = recap,
+                                onValueChange = { recap = it },
+                                label = { Text("How did it go?") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 4
+                            )
+                        }
+                    }
+                }
+
+                if (saving) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Saving…", style = MaterialTheme.typography.bodySmall)
+                    }
+                } else when (step) {
+                    EditStep.Intensity -> StepButtons(
+                        primaryLabel = "Continue", primaryEnabled = intensity > 0,
+                        onPrimary = { step = EditStep.Effort },
+                        secondaryLabel = "Cancel", onSecondary = onCancel
+                    )
+                    EditStep.Effort -> StepButtons(
+                        primaryLabel = "Continue", primaryEnabled = effort > 0,
+                        onPrimary = { step = EditStep.Injury },
+                        secondaryLabel = "Back", onSecondary = { step = EditStep.Intensity }
+                    )
+                    EditStep.Injury -> StepButtons(
+                        primaryLabel = "Continue", primaryEnabled = injury > 0,
+                        onPrimary = { step = EditStep.Recap },
+                        secondaryLabel = "Back", onSecondary = { step = EditStep.Effort }
+                    )
+                    EditStep.Recap -> StepButtons(
+                        primaryLabel = "Save", primaryEnabled = true,
+                        onPrimary = {
+                            onSave(SyncReconciler.RunFeedback(intensity, effort, injury, injuryComment, recap))
+                        },
+                        secondaryLabel = "Back", onSecondary = { step = EditStep.Injury }
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ActivityHeader(activity: StravaActivity, isRun: Boolean) {
     val km = activity.distanceMeters / 1000.0
