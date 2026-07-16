@@ -6,6 +6,12 @@ name: PR Build Check
 on:
   pull_request:
     branches: [main]
+  # Also run on direct pushes to any non-main branch. A push-triggered workflow
+  # reliably runs from the branch's own workflow file (unlike a pull_request
+  # workflow added within the PR), so this is what actually validates feature
+  # branches. main is excluded — build.yml already builds and publishes there.
+  push:
+    branches-ignore: [main]
 
 jobs:
   build-check:
