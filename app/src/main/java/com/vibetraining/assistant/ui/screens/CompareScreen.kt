@@ -1,6 +1,8 @@
 package com.vibetraining.assistant.ui.screens
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -22,6 +24,7 @@ import com.google.api.services.drive.DriveScopes
 import com.vibetraining.assistant.data.DriveService
 import com.vibetraining.assistant.data.PreferencesManager
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 @OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled")
@@ -37,13 +40,26 @@ fun CompareScreen(onBack: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
     var firing by remember { mutableStateOf(false) }
+    // Drive can demand a one-time consent screen on first access; hold its
+    // recovery intent here and launch it from a LaunchedEffect.
+    var pendingConsent by remember { mutableStateOf<Intent?>(null) }
 
     suspend fun regenerate() {
         loading = true
-        driveService.regenerateOrLoadComparison().fold(
-            onSuccess = { htmlContent = it.html },
-            onFailure = { error = it.message }
-        )
+        // Bound the wait so a stalled Drive/network call surfaces an error
+        // instead of spinning forever, and always show a non-empty message.
+        val result = withTimeoutOrNull(45_000) { driveService.regenerateOrLoadComparison() }
+        when {
+            result == null ->
+                error = "Google Drive didn't respond (timed out). Check your connection, then tap Reload."
+            result.isSuccess -> { htmlContent = result.getOrNull()?.html; error = null }
+            else -> {
+                val e = result.exceptionOrNull()
+                val consent = recoverableConsentIntent(e)
+                if (consent != null) pendingConsent = consent
+                else error = "Couldn't load the comparison — ${describe(e)}"
+            }
+        }
         loading = false
     }
 
@@ -78,6 +94,25 @@ fun CompareScreen(onBack: () -> Unit) {
             val code = (task.exception as? ApiException)?.statusCode
             error = "Google sign-in failed" +
                 (code?.let { " (code $it: ${GoogleSignInStatusCodes.getStatusCodeString(it)})" } ?: "")
+        }
+    }
+
+    // Launches Drive's consent screen; on approval the load is retried, now with
+    // the granted permission so the Drive read succeeds.
+    val consentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            scope.launch { regenerate() }
+        } else {
+            error = "Google Drive access was declined. Tap Reload to try again."
+        }
+    }
+
+    LaunchedEffect(pendingConsent) {
+        pendingConsent?.let { intent ->
+            pendingConsent = null
+            consentLauncher.launch(intent)
         }
     }
 

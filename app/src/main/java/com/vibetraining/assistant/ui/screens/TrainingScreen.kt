@@ -90,10 +90,20 @@ fun TrainingScreen(onBack: () -> Unit) {
     fun loadHtml() {
         scope.launch {
             loading = true
-            driveService.fetchTrainingHtml().fold(
-                onSuccess = { htmlContent = it; error = null },
-                onFailure = { error = it.message }
-            )
+            // Bound the wait so a stalled Drive/network call surfaces an error
+            // instead of spinning forever, and always show a non-empty message.
+            val result = withTimeoutOrNull(45_000) { driveService.fetchTrainingHtml() }
+            when {
+                result == null ->
+                    error = "Google Drive didn't respond (timed out). Check your connection, then tap Reload."
+                result.isSuccess -> { htmlContent = result.getOrNull(); error = null }
+                else -> {
+                    val e = result.exceptionOrNull()
+                    val consent = recoverableConsentIntent(e)
+                    if (consent != null) { afterConsent = { loadHtml() }; pendingConsent = consent }
+                    else error = "Couldn't load the training log — ${describe(e)}"
+                }
+            }
             loading = false
         }
     }
@@ -102,10 +112,12 @@ fun TrainingScreen(onBack: () -> Unit) {
     // the fetch fails rather than dropping to the error screen).
     fun reloadHtml() {
         scope.launch {
-            driveService.fetchTrainingHtml().fold(
-                onSuccess = { htmlContent = it; error = null },
-                onFailure = { snackbar.showSnackbar("Couldn't reload — ${describe(it)}") }
-            )
+            val result = withTimeoutOrNull(45_000) { driveService.fetchTrainingHtml() }
+            when {
+                result == null -> snackbar.showSnackbar("Reload timed out — check your connection.")
+                result.isSuccess -> { htmlContent = result.getOrNull(); error = null }
+                else -> snackbar.showSnackbar("Couldn't reload — ${describe(result.exceptionOrNull())}")
+            }
         }
     }
 
