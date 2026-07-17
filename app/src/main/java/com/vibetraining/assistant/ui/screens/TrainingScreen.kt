@@ -368,18 +368,19 @@ fun TrainingScreen(onBack: () -> Unit) {
         }
     }
 
-    // Fires the coaching Routine on demand to rate newly-logged runs (and any
-    // completed week that hasn't been analysed yet). Sync no longer does this
-    // automatically, so this is the manual trigger.
-    fun runCoachReview() {
+    // Bridge target: the popup's "Coach review this run" button. Fires the
+    // coaching Routine on demand to rate that specific logged run (sync no longer
+    // does this automatically).
+    fun onCoachActivity(stravaId: Long) {
         if (reviewing) return
         reviewing = true
         scope.launch {
             driveService.triggerCoaching(
                 prefs?.coachFireUrl.orEmpty(), prefs?.coachFireToken.orEmpty(),
-                "Run the coaching review now: rate newly logged runs and any unanalysed completed weeks."
+                "Run the coaching review now and rate the logged run with Strava id $stravaId " +
+                    "(plus any other newly logged runs or unanalysed completed weeks)."
             ).fold(
-                onSuccess = { snackbar.showSnackbar("Coach review started — reload in a moment to see ratings.") },
+                onSuccess = { snackbar.showSnackbar("Coach review started — reload in a moment to see the rating.") },
                 onFailure = { snackbar.showSnackbar("Couldn't start coach review — ${describe(it)}") }
             )
             reviewing = false
@@ -414,9 +415,6 @@ fun TrainingScreen(onBack: () -> Unit) {
                     TextButton(onClick = { startSync() }, enabled = !busy) {
                         Text(if (syncing) "…" else "Sync")
                     }
-                    TextButton(onClick = { runCoachReview() }, enabled = !reviewing && !firing) {
-                        Text(if (reviewing) "…" else "Coach")
-                    }
                     TextButton(onClick = { openEndWeek() }, enabled = !firing && !syncing) {
                         Text(if (firing) "…" else "End week")
                     }
@@ -435,7 +433,11 @@ fun TrainingScreen(onBack: () -> Unit) {
                     Text(error!!, color = MaterialTheme.colorScheme.error)
                     Button(onClick = { error = null; loadOrSignIn() }) { Text("Retry") }
                 }
-                htmlContent != null -> HtmlWebView(html = htmlContent!!, onEditActivity = { onEditActivity(it) })
+                htmlContent != null -> HtmlWebView(
+                    html = htmlContent!!,
+                    onEditActivity = { onEditActivity(it) },
+                    onCoachActivity = { onCoachActivity(it) }
+                )
             }
 
             // A thin progress line while a sync is in flight (the WebView stays up).
@@ -552,10 +554,15 @@ private fun EndWeekDialog(
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun HtmlWebView(html: String, onEditActivity: (Long) -> Unit = {}) {
-    // Keep the bridge pointed at the latest callback across recompositions even
+fun HtmlWebView(
+    html: String,
+    onEditActivity: (Long) -> Unit = {},
+    onCoachActivity: (Long) -> Unit = {}
+) {
+    // Keep the bridge pointed at the latest callbacks across recompositions even
     // though the JavascriptInterface is installed once in the factory.
     val editCb = rememberUpdatedState(onEditActivity)
+    val coachCb = rememberUpdatedState(onCoachActivity)
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
@@ -571,12 +578,17 @@ fun HtmlWebView(html: String, onEditActivity: (Long) -> Unit = {}) {
                     settings.forceDark = WebSettings.FORCE_DARK_OFF
                 }
                 addJavascriptInterface(object {
+                    // The bridge runs on a WebView worker thread; hop to the UI
+                    // thread before touching Compose state.
                     @JavascriptInterface
                     fun editActivity(stravaId: String) {
                         val id = stravaId.toLongOrNull() ?: return
-                        // The bridge runs on a WebView worker thread; hop to the UI
-                        // thread before touching Compose state.
                         post { editCb.value(id) }
+                    }
+                    @JavascriptInterface
+                    fun coachActivity(stravaId: String) {
+                        val id = stravaId.toLongOrNull() ?: return
+                        post { coachCb.value(id) }
                     }
                 }, "AndroidBridge")
                 loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
