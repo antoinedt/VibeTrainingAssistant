@@ -21,6 +21,11 @@ private const val TRAINING_DATA_BASE = "training_data"
 private const val COACH_NOTES_BASE = "coach_notes"
 private const val COMPARE_NOTES_BASE = "compare_notes"
 private const val TRAINING_DATA_NAME = "training_data.js"
+// Derived, coach-facing plan: base actuals + each week's overlay prescription.
+// Overwritten in place (never versioned, never hand-edited). The coaching
+// Routine should read THIS instead of the raw base so it sees the same plan
+// the athlete sees — including the prescribed session for a week in progress.
+private const val COACH_ASSEMBLED_NAME = "training_assembled.js"
 // Per-week overlay files (week_NN.js). Folded over the base training_data at
 // read time for the view paths so a single week can be revised by uploading one
 // small file. See weekOverlayFiles / assembleTrainingData.
@@ -269,6 +274,42 @@ class DriveService(private val context: Context) {
     private fun readAssembledTrainingData(drive: Drive): String =
         assembleTrainingData(drive, listFolder(drive))
 
+    /**
+     * The coach-facing plan. Unlike the view assembly (which drops the overlay
+     * for the week in progress so live runs aren't masked), this keeps every
+     * week's synced actuals in `acts` AND attaches the overlay's prescribed
+     * sessions as `plannedActs`, so the coach can judge a completed run against
+     * what was actually prescribed — even for the current week. Future planned
+     * weeks just get the overlay as their `acts`.
+     */
+    private fun assembleForCoach(drive: Drive, files: List<DriveFile>): String {
+        val baseFile = latestVersion(files, TRAINING_DATA_BASE, "js")
+            ?: error("No training_data*.js found in the Drive folder")
+        val weeks = CompareRenderer.parseWeeks(cachedDownload(drive, baseFile))
+        val overlays = runCatching { weekOverlayFiles(files) }.getOrDefault(emptyMap())
+        for (i in 0 until weeks.length()) {
+            val w = weeks.getJSONObject(i)
+            val ovFile = overlays[w.optInt("n", -1)] ?: continue
+            val ov = runCatching { cachedDownload(drive, ovFile) }.getOrNull() ?: continue
+            val ovActs = runCatching {
+                org.json.JSONObject(ov.substring(ov.indexOf('{'), ov.lastIndexOf('}') + 1))
+                    .optJSONArray("acts")
+            }.getOrNull() ?: continue
+            if (w.optString("status") == "planned") w.put("acts", ovActs)  // future: overlay is the plan
+            else w.put("plannedActs", ovActs)                              // done/current: keep actuals, add prescription
+        }
+        return "// AUTO-GENERATED (coach view: actuals + plannedActs)\n\nconst WEEKS = $weeks;\n"
+    }
+
+    /** Regenerates [COACH_ASSEMBLED_NAME] on Drive when it has drifted from the
+     *  current base+overlays. Best-effort — never fails the caller. */
+    private fun refreshCoachAssembled(drive: Drive, files: List<DriveFile>) {
+        val coachJs = assembleForCoach(drive, files)
+        val existing = latestVersion(files, "training_assembled", "js")
+            ?.let { runCatching { cachedDownload(drive, it) }.getOrNull() }
+        if (existing != coachJs) uploadText(drive, COACH_ASSEMBLED_NAME, coachJs, "text/javascript")
+    }
+
     /** Reads the latest compare_notes*.json overlay (the coach-authored Key
      *  Insights for the Cycle Comparison), or null when none exists. */
     private fun readLatestCompareNotes(drive: Drive): String? =
@@ -291,6 +332,8 @@ class DriveService(private val context: Context) {
             // repeat opens fast even with ~10 per-week overlay files.
             val files = listFolder(drive)
             val dataJs = assembleTrainingData(drive, files)
+            // Keep the coach-facing plan file in step with what the athlete sees.
+            runCatching { refreshCoachAssembled(drive, files) }
             // Coach analysis lives in a separate, assistant-maintained overlay so
             // it never collides with the Strava-driven training data; the template
             // merges it into each activity/week before rendering.
