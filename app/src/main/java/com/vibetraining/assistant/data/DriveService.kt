@@ -10,6 +10,7 @@ import com.google.api.services.drive.Drive
 import com.google.api.services.drive.DriveScopes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 
 private const val DRIVE_FOLDER_ID = "16tc_gd-7k8kuBN-QjLuqfIUQ4SrGkGPs"
 private const val COMPARE_HTML_NAME = "training_comparison.html"
@@ -22,7 +23,7 @@ private const val COMPARE_NOTES_BASE = "compare_notes"
 private const val TRAINING_DATA_NAME = "training_data.js"
 // Per-week overlay files (week_NN.js). Folded over the base training_data at
 // read time for the view paths so a single week can be revised by uploading one
-// small file. See readWeekOverlays / readAssembledTrainingData.
+// small file. See weekOverlayFiles / assembleTrainingData.
 private const val WEEK_OVERLAY_PREFIX = "week_"
 // Per-week athlete input written when a week is closed ("End week"): the coach
 // reads week_input_<n>.json as its own guidance channel, separate from the
@@ -45,33 +46,42 @@ private const val COACH_DATA_PLACEHOLDER = "__COACH_DATA__"
 
 /**
  * Script injected into the Training Log page at fetch time (not baked into the
- * Drive template) so an "Edit ratings & notes" button appears in the activity
- * popup — but only inside the app, where the AndroidBridge is present. It wraps
- * the template's openPopup to track the current logged run and hands its Strava
- * id back to native (TrainingScreen.onEditActivity) when tapped. Kept app-side
+ * Drive template) so per-activity action buttons — "Edit ratings & notes" and
+ * "Coach review this run" — appear in the popup, but only inside the app where
+ * the AndroidBridge is present. It wraps the template's openPopup to track the
+ * current logged run and hands its Strava id back to native
+ * (TrainingScreen.onEditActivity / onCoachActivity) when tapped. Kept app-side
  * so the feature ships with the APK and doesn't depend on re-uploading the
  * Drive-hosted template.
  */
-private const val EDIT_BUTTON_INJECTION = """
+private const val POPUP_BUTTONS_INJECTION = """
 <script>
 (function(){
-  if(!window.AndroidBridge||!window.AndroidBridge.editActivity) return;
+  if(!window.AndroidBridge) return;
   if(typeof openPopup!=='function') return;
   var EDIT_CLS={easy:1,tempo:1,long:1,'race-r':1};
   var CUR=null;
   var pop=document.querySelector('#popup .popup');
   if(!pop) return;
-  var btn=document.createElement('button');
-  btn.textContent='✎ Edit ratings & notes';
-  btn.style.cssText='display:none;width:100%;margin-top:16px;background:#0d1020;border:1px solid #1e2540;border-left:3px solid var(--easy);border-radius:8px;padding:11px 14px;cursor:pointer;color:#a8c0e8;font-size:.82rem;font-weight:700;font-family:inherit;text-align:left;letter-spacing:.3px;';
-  btn.onclick=function(){ if(CUR!=null){ AndroidBridge.editActivity(String(CUR)); document.getElementById('popup').classList.remove('open'); } };
-  pop.appendChild(btn);
+  function mkBtn(label, accent){
+    var b=document.createElement('button');
+    b.textContent=label;
+    b.style.cssText='display:none;width:100%;margin-top:10px;background:#0d1020;border:1px solid #1e2540;border-left:3px solid '+accent+';border-radius:8px;padding:11px 14px;cursor:pointer;color:#a8c0e8;font-size:.82rem;font-weight:700;font-family:inherit;text-align:left;letter-spacing:.3px;';
+    pop.appendChild(b);
+    return b;
+  }
+  var editBtn=window.AndroidBridge.editActivity ? mkBtn('✎ Edit ratings & notes','var(--easy)') : null;
+  var coachBtn=window.AndroidBridge.coachActivity ? mkBtn('🧠 Coach review this run','var(--bike)') : null;
+  if(editBtn) editBtn.onclick=function(){ if(CUR!=null){ AndroidBridge.editActivity(String(CUR)); document.getElementById('popup').classList.remove('open'); } };
+  if(coachBtn) coachBtn.onclick=function(){ if(CUR!=null){ AndroidBridge.coachActivity(String(CUR)); document.getElementById('popup').classList.remove('open'); } };
   var orig=openPopup;
   window.openPopup=function(idx){
     orig(idx);
     var e=(typeof ACT_DATA!=='undefined')?ACT_DATA[idx]:null;
     CUR=(e&&e.a&&e.a.strava_id!=null&&EDIT_CLS[e.a.cls])?e.a.strava_id:null;
-    btn.style.display=(CUR!=null)?'block':'none';
+    var show=(CUR!=null)?'block':'none';
+    if(editBtn) editBtn.style.display=show;
+    if(coachBtn) coachBtn.style.display=show;
   };
 })();
 </script>
@@ -132,6 +142,75 @@ class DriveService(private val context: Context) {
     private fun downloadById(drive: Drive, id: String): String =
         drive.files().get(id).executeMediaAsInputStream().use { it.bufferedReader().readText() }
 
+    // ── folder listing + on-disk content cache ──────────────────────────────
+    // The view path used to make a separate list() call per file base and then
+    // download every file (incl. ~10 per-week overlays) on every open — slow.
+    // Instead: list the whole folder once, resolve everything from that listing,
+    // and download only files whose content we don't already have cached.
+
+    private data class DriveFile(val id: String, val name: String, val modifiedTime: String?)
+
+    /** Every non-trashed file in the training folder, in one paged request. */
+    private fun listFolder(drive: Drive): List<DriveFile> {
+        val out = ArrayList<DriveFile>()
+        var pageToken: String? = null
+        do {
+            val resp = drive.files().list()
+                .setQ("'$DRIVE_FOLDER_ID' in parents and trashed = false")
+                .setFields("nextPageToken, files(id, name, modifiedTime)")
+                .setPageSize(1000)
+                .setPageToken(pageToken)
+                .execute()
+            resp.files.forEach { out.add(DriveFile(it.id, it.name, it.modifiedTime?.toStringRfc3339())) }
+            pageToken = resp.nextPageToken
+        } while (!pageToken.isNullOrEmpty())
+        return out
+    }
+
+    /** Highest-versioned `<base>.<ext>` / `<base>_<n>.<ext>` in the listing. */
+    private fun latestVersion(files: List<DriveFile>, base: String, ext: String): DriveFile? {
+        val regex = Regex("^" + Regex.escape(base) + "(?:_(\\d+))?\\." + Regex.escape(ext) + "$")
+        return files
+            .mapNotNull { f -> regex.matchEntire(f.name)?.let { f to (it.groupValues[1].toIntOrNull() ?: 0) } }
+            .maxByOrNull { it.second }
+            ?.first
+    }
+
+    /** week-number → highest-version overlay file, from the listing. */
+    private fun weekOverlayFiles(files: List<DriveFile>): Map<Int, DriveFile> {
+        val rx = Regex("^${WEEK_OVERLAY_PREFIX}(\\d{2})(?:_(\\d+))?\\.js$")
+        val best = HashMap<Int, Pair<Int, DriveFile>>()
+        for (f in files) {
+            val m = rx.matchEntire(f.name) ?: continue
+            val week = m.groupValues[1].toInt()
+            val ver = m.groupValues[2].toIntOrNull() ?: 0
+            val cur = best[week]
+            if (cur == null || ver > cur.first) best[week] = ver to f
+        }
+        return best.mapValues { it.value.second }
+    }
+
+    private fun cacheDir(): File = File(context.cacheDir, "drivecache").apply { mkdirs() }
+
+    /**
+     * Content of a file, served from disk when we already have this exact
+     * (id, modifiedTime) — Drive content is immutable for a given version, and an
+     * in-place update bumps modifiedTime, so this can never return stale data.
+     * Falls back to a direct download on any cache miss/error.
+     */
+    private fun cachedDownload(drive: Drive, file: DriveFile): String {
+        val mtime = file.modifiedTime ?: return downloadById(drive, file.id)
+        val cached = File(cacheDir(), file.id + "_" + mtime.hashCode())
+        runCatching { if (cached.exists()) return cached.readText(Charsets.UTF_8) }
+        val content = downloadById(drive, file.id)
+        runCatching {
+            // Drop older cached versions of this file id, then store the new one.
+            cacheDir().listFiles { f -> f.name.startsWith(file.id + "_") }?.forEach { it.delete() }
+            cached.writeText(content, Charsets.UTF_8)
+        }
+        return content
+    }
+
     /**
      * Id of the highest-numbered file matching `<base>.<ext>` / `<base>_<n>.<ext>`
      * in the folder (bare name counts as version 0), or null if none exist.
@@ -156,49 +235,27 @@ class DriveService(private val context: Context) {
     }
 
     /**
-     * Per-week overlay files let a single week be revised by uploading one small
-     * file (`week_NN.js`, ~2 KB) instead of rewriting the whole plan. They are a
-     * read-time fold over the base training_data for the *view* paths only — the
-     * Strava sync read/write keep using the monolithic base, so actuals are never
-     * touched by this. A week number maps to the highest-version file
-     * (`week_NN.js` is v0, `week_NN_v.js` is v_); each holds one week's JSON
-     * object. Returns week-number → file contents.
-     */
-    private fun readWeekOverlays(drive: Drive): Map<Int, String> {
-        val rx = Regex("^${WEEK_OVERLAY_PREFIX}(\\d{2})(?:_(\\d+))?\\.js$")
-        val files = drive.files().list()
-            .setQ("'$DRIVE_FOLDER_ID' in parents and name contains '$WEEK_OVERLAY_PREFIX' and trashed = false")
-            .setFields("files(id, name)")
-            .execute().files
-        val best = HashMap<Int, Pair<Int, String>>()  // week -> (version, fileId)
-        for (f in files) {
-            val m = rx.matchEntire(f.name) ?: continue
-            val week = m.groupValues[1].toInt()
-            val ver = m.groupValues[2].toIntOrNull() ?: 0
-            val cur = best[week]
-            if (cur == null || ver > cur.first) best[week] = ver to f.id
-        }
-        return best.mapValues { (_, v) -> downloadById(drive, v.second) }
-    }
-
-    /**
      * Base training_data*.js with any per-week overlays folded in, returned as a
      * `const WEEKS=[…]` string identical in shape to the monolithic file. An
-     * overlay replaces a week only when the base week is still `planned`: once a
-     * week is `current`/`actual` the live Strava data owns it, so a stale future
-     * plan can never mask real activities. Falls back to the raw base when no
-     * overlays apply.
+     * overlay (a small `week_NN.js`, v0, or `week_NN_v.js`, vv) replaces a week
+     * only when the base week is still `planned`: once a week is `current`/
+     * `actual` the live Strava data owns it, so a stale future plan can never
+     * mask real activities. Overlays are downloaded (from cache) only for the
+     * planned weeks that actually use one. Falls back to the raw base.
      */
-    private fun readAssembledTrainingData(drive: Drive): String {
-        val baseJs = readLatestTrainingData(drive)
-        val overlays = runCatching { readWeekOverlays(drive) }.getOrDefault(emptyMap())
+    private fun assembleTrainingData(drive: Drive, files: List<DriveFile>): String {
+        val baseFile = latestVersion(files, TRAINING_DATA_BASE, "js")
+            ?: error("No training_data*.js found in the Drive folder")
+        val baseJs = cachedDownload(drive, baseFile)
+        val overlays = runCatching { weekOverlayFiles(files) }.getOrDefault(emptyMap())
         if (overlays.isEmpty()) return baseJs
         val weeks = CompareRenderer.parseWeeks(baseJs)
         var applied = 0
         for (i in 0 until weeks.length()) {
             val w = weeks.getJSONObject(i)
             if (w.optString("status") != "planned") continue  // live data owns actual/current weeks
-            val ov = overlays[w.optInt("n", -1)] ?: continue
+            val ovFile = overlays[w.optInt("n", -1)] ?: continue
+            val ov = runCatching { cachedDownload(drive, ovFile) }.getOrNull() ?: continue
             val obj = runCatching {
                 org.json.JSONObject(ov.substring(ov.indexOf('{'), ov.lastIndexOf('}') + 1))
             }.getOrNull() ?: continue
@@ -208,20 +265,14 @@ class DriveService(private val context: Context) {
         return if (applied == 0) baseJs else "// AUTO-GENERATED\n\nconst WEEKS = $weeks;\n"
     }
 
-    /** Reads the latest coach_notes*.json overlay, or null when none exists. */
-    private fun readLatestCoachNotes(drive: Drive): String? =
-        latestVersionId(drive, COACH_NOTES_BASE, "json")?.let { downloadById(drive, it) }
+    /** Convenience for callers that only need the assembled data (one listing). */
+    private fun readAssembledTrainingData(drive: Drive): String =
+        assembleTrainingData(drive, listFolder(drive))
 
     /** Reads the latest compare_notes*.json overlay (the coach-authored Key
      *  Insights for the Cycle Comparison), or null when none exists. */
     private fun readLatestCompareNotes(drive: Drive): String? =
         latestVersionId(drive, COMPARE_NOTES_BASE, "json")?.let { downloadById(drive, it) }
-
-    /** The latest training_log*.html template hosted in Drive, or null when none
-     *  exists. Lets the Training Log presentation be updated without an app build. */
-    private fun readLatestTemplate(drive: Drive): String? =
-        latestVersionId(drive, "training_log", "html")
-            ?.let { runCatching { downloadById(drive, it) }.getOrNull() }
 
     private fun loadAsset(name: String): String =
         context.assets.open(name).bufferedReader().use { it.readText() }
@@ -235,26 +286,33 @@ class DriveService(private val context: Context) {
     suspend fun fetchTrainingHtml(): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val drive = buildDrive() ?: error("Not signed in to Google")
-            val dataJs = readAssembledTrainingData(drive)
+            // One folder listing drives everything below; each file is then served
+            // from the on-disk cache unless its Drive version changed. This keeps
+            // repeat opens fast even with ~10 per-week overlay files.
+            val files = listFolder(drive)
+            val dataJs = assembleTrainingData(drive, files)
             // Coach analysis lives in a separate, assistant-maintained overlay so
             // it never collides with the Strava-driven training data; the template
             // merges it into each activity/week before rendering.
-            val coachJson = readLatestCoachNotes(drive) ?: "{}"
+            val coachJson = latestVersion(files, COACH_NOTES_BASE, "json")
+                ?.let { cachedDownload(drive, it) } ?: "{}"
             // The template must live in Drive (so the presentation is updated
             // without an app build, and it's unambiguous which one is in use).
             // No bundled fallback: a missing/invalid template fails loudly so it's
             // obvious the Drive file needs (re)uploading.
-            val template = readLatestTemplate(drive)?.takeIf { it.contains(TRAINING_DATA_PLACEHOLDER) }
+            val templateFile = latestVersion(files, "training_log", "html")
                 ?: error("Missing training_log.html in your Drive folder. Upload the template (with the data placeholder) there to view the Training Log.")
+            val template = cachedDownload(drive, templateFile).takeIf { it.contains(TRAINING_DATA_PLACEHOLDER) }
+                ?: error("training_log.html in Drive is missing the data placeholder; re-upload the template.")
             // Kotlin's String.replace(String, String) is a literal replacement,
             // so '$' or '\' in the data are inserted verbatim.
             val page = template
                 .replace(TRAINING_DATA_PLACEHOLDER, dataJs)
                 .replace(COACH_DATA_PLACEHOLDER, coachJson)
-            // Add the in-app edit affordance just before </body> (falls back to
-            // appending if the tag is absent).
-            if (page.contains("</body>")) page.replaceFirst("</body>", "$EDIT_BUTTON_INJECTION</body>")
-            else page + EDIT_BUTTON_INJECTION
+            // Add the in-app per-activity buttons just before </body> (falls back
+            // to appending if the tag is absent).
+            if (page.contains("</body>")) page.replaceFirst("</body>", "$POPUP_BUTTONS_INJECTION</body>")
+            else page + POPUP_BUTTONS_INJECTION
         }
     }
 
