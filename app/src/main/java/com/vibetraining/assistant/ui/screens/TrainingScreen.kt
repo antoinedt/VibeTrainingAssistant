@@ -65,6 +65,8 @@ fun TrainingScreen(onBack: () -> Unit) {
 
     // End-week flow.
     var firing by remember { mutableStateOf(false) }
+    // Manual coach-review trigger (sync no longer fires it automatically).
+    var reviewing by remember { mutableStateOf(false) }
     var showEndWeek by remember { mutableStateOf(false) }
     var loadingWeeks by remember { mutableStateOf(false) }
     var weekOptions by remember { mutableStateOf<List<WeekSummary>>(emptyList()) }
@@ -366,6 +368,24 @@ fun TrainingScreen(onBack: () -> Unit) {
         }
     }
 
+    // Fires the coaching Routine on demand to rate newly-logged runs (and any
+    // completed week that hasn't been analysed yet). Sync no longer does this
+    // automatically, so this is the manual trigger.
+    fun runCoachReview() {
+        if (reviewing) return
+        reviewing = true
+        scope.launch {
+            driveService.triggerCoaching(
+                prefs?.coachFireUrl.orEmpty(), prefs?.coachFireToken.orEmpty(),
+                "Run the coaching review now: rate newly logged runs and any unanalysed completed weeks."
+            ).fold(
+                onSuccess = { snackbar.showSnackbar("Coach review started — reload in a moment to see ratings.") },
+                onFailure = { snackbar.showSnackbar("Couldn't start coach review — ${describe(it)}") }
+            )
+            reviewing = false
+        }
+    }
+
     LaunchedEffect(Unit) { loadOrSignIn() }
 
     // Surface sync progress/results as snackbars so the WebView stays visible.
@@ -393,6 +413,9 @@ fun TrainingScreen(onBack: () -> Unit) {
                     }
                     TextButton(onClick = { startSync() }, enabled = !busy) {
                         Text(if (syncing) "…" else "Sync")
+                    }
+                    TextButton(onClick = { runCoachReview() }, enabled = !reviewing && !firing) {
+                        Text(if (reviewing) "…" else "Coach")
                     }
                     TextButton(onClick = { openEndWeek() }, enabled = !firing && !syncing) {
                         Text(if (firing) "…" else "End week")
