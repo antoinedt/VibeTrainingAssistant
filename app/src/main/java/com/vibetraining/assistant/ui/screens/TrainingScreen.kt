@@ -35,6 +35,7 @@ import com.vibetraining.assistant.data.StravaAuthBus
 import com.vibetraining.assistant.data.StravaService
 import com.vibetraining.assistant.data.SyncReconciler
 import com.vibetraining.assistant.data.WeekSummary
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
@@ -67,6 +68,10 @@ fun TrainingScreen(onBack: () -> Unit) {
     var firing by remember { mutableStateOf(false) }
     // Manual coach-review trigger (sync no longer fires it automatically).
     var reviewing by remember { mutableStateOf(false) }
+    // A fired Routine (End week / Coach review) runs on the server for several
+    // minutes; this holds a banner message while we poll Drive for its output so
+    // the screen doesn't look idle. null = nothing in flight.
+    var coaching by remember { mutableStateOf<String?>(null) }
     var showEndWeek by remember { mutableStateOf(false) }
     var loadingWeeks by remember { mutableStateOf(false) }
     var weekOptions by remember { mutableStateOf<List<WeekSummary>>(emptyList()) }
@@ -87,7 +92,7 @@ fun TrainingScreen(onBack: () -> Unit) {
     var editSaving by remember { mutableStateOf(false) }
 
     val syncing = syncState is SyncState.Loading || reconcileActivities != null
-    val busy = loading || syncing || firing
+    val busy = loading || syncing || firing || coaching != null
 
     fun loadHtml() {
         scope.launch {
@@ -120,6 +125,29 @@ fun TrainingScreen(onBack: () -> Unit) {
                 result.isSuccess -> { htmlContent = result.getOrNull(); error = null }
                 else -> snackbar.showSnackbar("Couldn't reload — ${describe(result.exceptionOrNull())}")
             }
+        }
+    }
+
+    // A fired Routine takes minutes to write its result. Keep [coaching] set (so a
+    // banner shows and controls stay disabled), poll Drive until a new file version
+    // appears past [baseline], then refresh the log and report done. Bounded so a
+    // stalled/failed Routine can't spin forever.
+    fun awaitCoachOutput(banner: String, baseline: Int, fetchVersion: suspend () -> Int, doneMsg: String) {
+        coaching = banner
+        scope.launch {
+            val deadline = System.currentTimeMillis() + 30 * 60_000L  // give up after 30 min
+            while (System.currentTimeMillis() < deadline) {
+                delay(20_000)
+                if (fetchVersion() > baseline) {
+                    val result = withTimeoutOrNull(45_000) { driveService.fetchTrainingHtml() }
+                    if (result?.isSuccess == true) { htmlContent = result.getOrNull(); error = null }
+                    coaching = null
+                    snackbar.showSnackbar(doneMsg)
+                    return@launch
+                }
+            }
+            coaching = null
+            snackbar.showSnackbar("Coach is still working — tap Reload in a few minutes to pick it up.")
         }
     }
 
@@ -351,16 +379,25 @@ fun TrainingScreen(onBack: () -> Unit) {
 
     fun submitEndWeek() {
         val wk = selectedWeek ?: return
-        if (firing) return
+        if (firing || coaching != null) return
         firing = true
         showEndWeek = false
         scope.launch {
+            // Baseline the coach_notes version now; the End-week Routine writes a
+            // new one (after the replan overlays) when it's done.
+            val baseline = driveService.coachNotesVersion()
             driveService.endWeek(
                 wk, guidelines,
                 prefs?.coachFireUrl.orEmpty(), prefs?.coachFireToken.orEmpty()
             ).fold(
                 onSuccess = {
-                    snackbar.showSnackbar("Week $wk closed — coach is evaluating & replanning. Reload shortly.")
+                    awaitCoachOutput(
+                        banner = "Coach is evaluating week $wk and replanning the next weeks — " +
+                            "this takes a few minutes. The log updates automatically when it's ready.",
+                        baseline = baseline,
+                        fetchVersion = { driveService.coachNotesVersion() },
+                        doneMsg = "Week $wk closed and the next weeks replanned."
+                    )
                 },
                 onFailure = { snackbar.showSnackbar("Couldn't close the week — ${it.message}") }
             )
@@ -372,15 +409,24 @@ fun TrainingScreen(onBack: () -> Unit) {
     // coaching Routine on demand to rate that specific logged run (sync no longer
     // does this automatically).
     fun onCoachActivity(stravaId: Long) {
-        if (reviewing) return
+        if (reviewing || coaching != null) return
         reviewing = true
         scope.launch {
+            val baseline = driveService.coachNotesVersion()
             driveService.triggerCoaching(
                 prefs?.coachFireUrl.orEmpty(), prefs?.coachFireToken.orEmpty(),
                 "Run the coaching review now and rate the logged run with Strava id $stravaId " +
                     "(plus any other newly logged runs or unanalysed completed weeks)."
             ).fold(
-                onSuccess = { snackbar.showSnackbar("Coach review started — reload in a moment to see the rating.") },
+                onSuccess = {
+                    awaitCoachOutput(
+                        banner = "Coach is reviewing this run — this takes a few minutes. " +
+                            "The rating appears automatically when it's ready.",
+                        baseline = baseline,
+                        fetchVersion = { driveService.coachNotesVersion() },
+                        doneMsg = "Coach review ready."
+                    )
+                },
                 onFailure = { snackbar.showSnackbar("Couldn't start coach review — ${describe(it)}") }
             )
             reviewing = false
@@ -415,8 +461,8 @@ fun TrainingScreen(onBack: () -> Unit) {
                     TextButton(onClick = { startSync() }, enabled = !busy) {
                         Text(if (syncing) "…" else "Sync")
                     }
-                    TextButton(onClick = { openEndWeek() }, enabled = !firing && !syncing) {
-                        Text(if (firing) "…" else "End week")
+                    TextButton(onClick = { openEndWeek() }, enabled = !firing && !syncing && coaching == null) {
+                        Text(if (firing || coaching != null) "…" else "End week")
                     }
                 }
             )
@@ -443,6 +489,32 @@ fun TrainingScreen(onBack: () -> Unit) {
             // A thin progress line while a sync is in flight (the WebView stays up).
             if (syncState is SyncState.Loading) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter))
+            }
+
+            // Persistent banner while a fired Routine runs in the background, so
+            // "End week" / "Coach review" don't look like they did nothing.
+            coaching?.let { message ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    tonalElevation = 3.dp
+                ) {
+                    Column(Modifier.fillMaxWidth()) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Text(
+                                message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
+                }
             }
 
             if (showEndWeek) {
