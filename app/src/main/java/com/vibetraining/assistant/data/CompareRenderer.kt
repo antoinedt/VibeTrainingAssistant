@@ -65,6 +65,11 @@ object CompareRenderer {
         val mix = IntArray(6)
         var actCount = 0
 
+        // "So far" = training logged to date: completed weeks (actual) AND the
+        // week in progress (current). Excluding current dropped the just-closed
+        // week from every summary stat even though its runs are already logged.
+        fun counted(s: String) = s == "actual" || s == "current"
+
         for (i in 0 until n) {
             val w = weeks.getJSONObject(i)
             km.add(w.optDouble("runKm", 0.0))
@@ -73,7 +78,7 @@ object CompareRenderer {
             statuses.add(status)
             nums.add(w.optInt("n", i + 1))
             val acts = w.optJSONArray("acts") ?: JSONArray()
-            val isActual = status == "actual"
+            val isActual = counted(status)
             for (j in 0 until acts.length()) {
                 val a = acts.getJSONObject(j)
                 if (isActual) {
@@ -89,14 +94,14 @@ object CompareRenderer {
         var running = 0.0
         for (v in km) { running += v; cum.add(round1(running)) }
 
-        val actualN = statuses.count { it == "actual" }
+        val actualN = statuses.count { counted(it) }
 
         // Phase buckets: BASE W1-8, BUILD W9-16, PEAK W17-22, TAPER W23-26.
         fun bucket(i: Int) = when { i < 8 -> 0; i < 16 -> 1; i < 22 -> 2; else -> 3 }
         val phase = DoubleArray(4)
         val phaseWeeks = IntArray(4)
         for (i in 0 until n) {
-            if (statuses[i] == "actual") {
+            if (counted(statuses[i])) {
                 phase[bucket(i)] += km[i]
                 phaseWeeks[bucket(i)]++
             }
@@ -106,12 +111,12 @@ object CompareRenderer {
             if (phaseWeeks[i] > 0) round1(total / phaseWeeks[i]) else 0.0
         }
 
-        // Stats over actual weeks only.
+        // Stats over logged-to-date weeks (completed + in progress).
         var kmSoFar = 0.0
         var peakKm = 0.0; var peakKmWk = 0
         var peakLng = 0.0; var peakLngWk = 0
         for (i in 0 until n) {
-            if (statuses[i] != "actual") continue
+            if (!counted(statuses[i])) continue
             kmSoFar += km[i]
             if (km[i] > peakKm) { peakKm = km[i]; peakKmWk = nums[i] }
             if (lng[i] > peakLng) { peakLng = lng[i]; peakLngWk = nums[i] }
