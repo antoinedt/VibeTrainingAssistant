@@ -232,6 +232,32 @@ class DriveService(private val context: Context) {
             ?.first?.id
     }
 
+    /**
+     * Highest version number of `<base>.<ext>` / `<base>_<n>.<ext>` in the folder
+     * (a bare name counts as version 0), or -1 if none exist or on any error.
+     * Lets the UI poll for a fired Routine's output: capture this before firing,
+     * then wait for it to climb. Never throws.
+     */
+    private suspend fun latestVersionNumber(base: String, ext: String): Int =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val drive = buildDrive() ?: return@runCatching -1
+                val regex = Regex("^" + Regex.escape(base) + "(?:_(\\d+))?\\." + Regex.escape(ext) + "$")
+                drive.files().list()
+                    .setQ("'$DRIVE_FOLDER_ID' in parents and name contains '$base' and trashed = false")
+                    .setFields("files(id, name)")
+                    .execute().files
+                    .mapNotNull { f -> regex.matchEntire(f.name)?.let { it.groupValues[1].toIntOrNull() ?: 0 } }
+                    .maxOrNull() ?: -1
+            }.getOrDefault(-1)
+        }
+
+    /** Highest coach_notes*.json version in the folder (-1 if none). */
+    suspend fun coachNotesVersion(): Int = latestVersionNumber(COACH_NOTES_BASE, "json")
+
+    /** Highest compare_notes*.json version in the folder (-1 if none). */
+    suspend fun compareNotesVersion(): Int = latestVersionNumber(COMPARE_NOTES_BASE, "json")
+
     /** Reads the latest training_data*.js from the folder. */
     private fun readLatestTrainingData(drive: Drive): String {
         val id = latestVersionId(drive, TRAINING_DATA_BASE, "js")
@@ -489,8 +515,9 @@ class DriveService(private val context: Context) {
         "split, plus injury ratings and recaps) and the latest coach_notes overlay. " +
         "3) Evaluate week $week: write a week rating, analysis and updated goal probabilities into a new " +
         "coach_notes overlay version in Drive. " +
-        "4) Replan the next ~3–4 upcoming planned weeks in a new training_data version, weighing the athlete's " +
-        "guidelines together with your own evaluation (fatigue, the intensity/effort gap, injury signals). " +
+        "4) Replan the next ~3–4 upcoming planned weeks as per-week overlay files (week_NN.js, or " +
+        "week_NN_<v>.js for a higher version) — one JSON week object each, per your instructions — weighing the " +
+        "athlete's guidelines together with your own evaluation (fatigue, the intensity/effort gap, injury signals). " +
         "Keep the peak/taper periodization and the race date intact unless something clearly warrants a change. " +
         "Apply the changes directly by writing the new files."
 
