@@ -268,11 +268,16 @@ class DriveService(private val context: Context) {
     /**
      * Base training_data*.js with any per-week overlays folded in, returned as a
      * `const WEEKS=[…]` string identical in shape to the monolithic file. An
-     * overlay (a small `week_NN.js`, v0, or `week_NN_v.js`, vv) replaces a week
-     * only when the base week is still `planned`: once a week is `current`/
-     * `actual` the live Strava data owns it, so a stale future plan can never
-     * mask real activities. Overlays are downloaded (from cache) only for the
-     * planned weeks that actually use one. Falls back to the raw base.
+     * overlay (a small `week_NN.js`, v0, or `week_NN_v.js`, vv) is applied by
+     * week status:
+     *  - `planned` → the overlay replaces the week wholesale (it's pure plan);
+     *  - `current` → the overlay is **merged**: logged runs (those with a
+     *    `strava_id`) are kept as-is, and the replan fills only the days not yet
+     *    logged, so closing/replanning the week in progress survives a sync
+     *    without masking real activities;
+     *  - `actual` → never touched; completed weeks are real history.
+     * Overlays are downloaded (from cache) only for the weeks that use one.
+     * Falls back to the raw base.
      */
     private fun assembleTrainingData(drive: Drive, files: List<DriveFile>): String {
         val baseFile = latestVersion(files, TRAINING_DATA_BASE, "js")
@@ -284,16 +289,61 @@ class DriveService(private val context: Context) {
         var applied = 0
         for (i in 0 until weeks.length()) {
             val w = weeks.getJSONObject(i)
-            if (w.optString("status") != "planned") continue  // live data owns actual/current weeks
+            val status = w.optString("status")
+            if (status == "actual") continue  // completed weeks are real history
             val ovFile = overlays[w.optInt("n", -1)] ?: continue
             val ov = runCatching { cachedDownload(drive, ovFile) }.getOrNull() ?: continue
             val obj = runCatching {
                 org.json.JSONObject(ov.substring(ov.indexOf('{'), ov.lastIndexOf('}') + 1))
             }.getOrNull() ?: continue
-            weeks.put(i, obj)
+            weeks.put(i, if (status == "current") mergeCurrentWeekOverlay(w, obj) else obj)
             applied++
         }
         return if (applied == 0) baseJs else "// AUTO-GENERATED\n\nconst WEEKS = $weeks;\n"
+    }
+
+    /**
+     * Folds an overlay into the week in progress without dropping logged runs.
+     * Keeps every base act that carries a `strava_id` (a real, synced activity),
+     * substitutes it at its day in place of the overlay's plan for that day, and
+     * takes the overlay's prescription for every day not yet logged. Any logged
+     * day the plan doesn't mention (e.g. an unplanned run) is kept up front.
+     * Week metadata (dates/km targets) comes from the overlay; status stays
+     * `current`. Day labels share the `"EEE MMM d"` format on both sides.
+     */
+    private fun mergeCurrentWeekOverlay(base: org.json.JSONObject, ov: org.json.JSONObject): org.json.JSONObject {
+        val baseActs = base.optJSONArray("acts") ?: org.json.JSONArray()
+        val loggedByDay = LinkedHashMap<String, MutableList<org.json.JSONObject>>()
+        for (j in 0 until baseActs.length()) {
+            val a = baseActs.getJSONObject(j)
+            if (!a.has("strava_id")) continue  // planned base item — the overlay supersedes it
+            loggedByDay.getOrPut(a.optString("d")) { mutableListOf() }.add(a)
+        }
+        val ovActs = ov.optJSONArray("acts") ?: org.json.JSONArray()
+        val overlayDays = HashSet<String>()
+        for (j in 0 until ovActs.length()) overlayDays.add(ovActs.getJSONObject(j).optString("d"))
+
+        val merged = org.json.JSONArray()
+        val emitted = HashSet<String>()
+        // Logged days the plan doesn't cover come first (keeps chronology sane).
+        for ((day, list) in loggedByDay) {
+            if (day !in overlayDays) { list.forEach { merged.put(it) }; emitted.add(day) }
+        }
+        // Walk the plan in order; a logged day shows its actual(s) instead.
+        for (j in 0 until ovActs.length()) {
+            val p = ovActs.getJSONObject(j)
+            val day = p.optString("d")
+            if (loggedByDay.containsKey(day)) {
+                if (emitted.add(day)) loggedByDay[day]!!.forEach { merged.put(it) }
+            } else {
+                merged.put(p)
+            }
+        }
+        val out = org.json.JSONObject(ov.toString())
+        out.put("status", "current")
+        if (base.has("dates")) out.put("dates", base.optString("dates"))
+        out.put("acts", merged)
+        return out
     }
 
     /** Convenience for callers that only need the assembled data (one listing). */
