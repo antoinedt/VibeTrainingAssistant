@@ -258,13 +258,6 @@ class DriveService(private val context: Context) {
     /** Highest compare_notes*.json version in the folder (-1 if none). */
     suspend fun compareNotesVersion(): Int = latestVersionNumber(COMPARE_NOTES_BASE, "json")
 
-    /** Reads the latest training_data*.js from the folder. */
-    private fun readLatestTrainingData(drive: Drive): String {
-        val id = latestVersionId(drive, TRAINING_DATA_BASE, "js")
-            ?: error("No training_data*.js found in the Drive folder")
-        return downloadById(drive, id)
-    }
-
     /**
      * Base training_data*.js with any per-week overlays folded in, returned as a
      * `const WEEKS=[…]` string identical in shape to the monolithic file. An
@@ -470,11 +463,17 @@ class DriveService(private val context: Context) {
 
     fun isSignedIn(): Boolean = GoogleSignIn.getLastSignedInAccount(context) != null
 
-    /** Latest training_data*.js from Drive, for diffing newly-synced activities. */
+    /**
+     * The current training data for the sync/edit flows, with per-week overlays
+     * folded in (same view the training log shows) — so the sync match-picker
+     * offers the same planned sessions the athlete sees in the plan, not the
+     * stale base plan. Writing the reconciled result back simply bakes the
+     * current overlays into the base; they re-apply idempotently on next read.
+     */
     suspend fun downloadTrainingDataText(): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val drive = buildDrive() ?: error("Not signed in to Google")
-            readLatestTrainingData(drive)
+            readAssembledTrainingData(drive)
         }
     }
 
