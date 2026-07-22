@@ -245,6 +245,16 @@ object SyncReconciler {
         return out
     }
 
+    /** The set of week numbers the given activities fall into (for deciding which
+     *  per-week `done` files a sync must rewrite). */
+    fun weeksOf(activities: List<StravaActivity>): Set<Int> =
+        activities.map { weekForDate(parseDate(it.startDateLocal)) }.toSet()
+
+    /** Week [n]'s logged (strava_id) acts within [weeks] — the complete actuals to
+     *  write to that week's `done` file. Empty if the week isn't present. */
+    fun loggedActsForWeek(weeks: JSONArray, n: Int): JSONArray =
+        weekByN(weeks, n)?.let { loggedActs(it) } ?: JSONArray()
+
     /**
      * Merges logged runs into a plan for the week in progress: keeps every logged
      * act at its day, substitutes it for the plan's item on that day, and takes

@@ -489,6 +489,26 @@ class DriveService(private val context: Context) {
     }
 
     /**
+     * Writes week [n]'s logged activities to a new `week_NN_done*.js` version —
+     * the per-week actuals store the assembly reads (falling back to base). Only
+     * the runs carrying a `strava_id` are written; the plan lives in `week_NN.js`.
+     * A new version is created each time (Drive can't overwrite); the assembly
+     * reads the highest. Best-effort — the base file remains a full backup.
+     */
+    suspend fun saveWeekDone(n: Int, acts: org.json.JSONArray): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val drive = buildDrive() ?: error("Not signed in to Google")
+            val nn = "%02d".format(n)
+            val base = "week_${nn}_done"
+            val next = latestVersionNumber(base, "js") + 1  // -1 (none) → 0 → bare name
+            val name = if (next == 0) "$base.js" else "${base}_$next.js"
+            val obj = org.json.JSONObject().put("n", n).put("acts", acts)
+            uploadText(drive, name, "// week $n — logged activities (auto-written by sync)\n$obj\n", "text/javascript")
+            Unit
+        }
+    }
+
+    /**
      * Fires the coaching Routine on demand by POSTing to its /fire endpoint,
      * returning the new session URL (or "started"). The URL+token come from the
      * app Settings; if either is blank, falls back to a `routine_trigger.json`

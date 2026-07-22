@@ -286,7 +286,9 @@ fun TrainingScreen(onBack: () -> Unit) {
     fun finishReconcile() {
         val weeks = reconcileWeeks
         val original = reconcileOriginal
-        val count = reconcileActivities.orEmpty().size
+        val fresh = reconcileActivities.orEmpty()
+        val count = fresh.size
+        val affected = SyncReconciler.weeksOf(fresh)
         reconcileActivities = null
         reconcileWeeks = null
         if (weeks == null) return
@@ -296,11 +298,19 @@ fun TrainingScreen(onBack: () -> Unit) {
                 val today = LocalDate.now()
                 SyncReconciler.cleanPastPending(weeks, today)
                 SyncReconciler.normalizeStatuses(weeks, today)
+                // Base file stays a full backup (and the fallback for un-split
+                // weeks); it is written first so no logged run can be lost.
                 val text = SyncReconciler.serialize(original, weeks)
                 val saved = driveService.saveTrainingDataText(text)
                 if (saved.isFailure) {
                     syncState = SyncState.Error("Drive save failed — ${describe(saved.exceptionOrNull())}")
                     return@launch
+                }
+                // Per-week actuals store: write the done file for each week that
+                // gained an activity. The assembly prefers these; if one fails the
+                // base backup already holds the same runs, so nothing is lost.
+                for (n in affected) {
+                    driveService.saveWeekDone(n, SyncReconciler.loggedActsForWeek(weeks, n))
                 }
                 val s = if (count == 1) "activity" else "activities"
                 syncState = SyncState.Success("Training log updated · $count new $s logged.")
