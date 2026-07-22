@@ -65,10 +65,11 @@ object CompareRenderer {
         val mix = IntArray(6)
         var actCount = 0
 
-        // "So far" = training logged to date: completed weeks (actual) AND the
-        // week in progress (current). Excluding current dropped the just-closed
-        // week from every summary stat even though its runs are already logged.
-        fun counted(s: String) = s == "actual" || s == "current"
+        // "So far" = fully completed (actual) weeks only. Statuses are now
+        // date-derived, so a just-ended week is "actual" and counts, while the
+        // in-progress "current" week (still mostly planned) is left out until it
+        // completes — the honest cross-cycle comparison point.
+        fun counted(s: String) = s == "actual"
 
         for (i in 0 until n) {
             val w = weeks.getJSONObject(i)
@@ -81,7 +82,9 @@ object CompareRenderer {
             val isActual = counted(status)
             for (j in 0 until acts.length()) {
                 val a = acts.getJSONObject(j)
-                if (isActual) {
+                // Only count real, logged activities — not the current week's
+                // still-pending planned sessions.
+                if (isActual && a.has("strava_id")) {
                     actCount++
                     val idx = MIX_KEYS.indexOf(a.optString("cls"))
                     if (idx >= 0) mix[idx]++

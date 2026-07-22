@@ -203,18 +203,77 @@ object SyncReconciler {
         }
     }
 
+    /** Date-derived status for week [n]: actual (fully in the past) / current
+     *  (today falls in it) / planned (still to come). */
+    fun statusFor(n: Int, today: LocalDate): String = when {
+        weekEnd(n).isBefore(today) -> "actual"
+        !weekStart(n).isAfter(today) -> "current"
+        else -> "planned"
+    }
+
     /** Sets each week's `status` from today's date (actual / current / planned). */
     fun normalizeStatuses(weeks: JSONArray, today: LocalDate) {
         for (i in 0 until weeks.length()) {
             val w = weeks.getJSONObject(i)
-            val n = w.optInt("n", i + 1)
-            val status = when {
-                weekEnd(n).isBefore(today) -> "actual"
-                !weekStart(n).isAfter(today) -> "current"
-                else -> "planned"
-            }
-            w.put("status", status)
+            w.put("status", statusFor(w.optInt("n", i + 1), today))
         }
+    }
+
+    /** runKm (sum) and longKm (max) over the run-class acts of [acts]. */
+    fun volumeFor(acts: JSONArray): Pair<Double, Double> {
+        var run = 0.0
+        var lng = 0.0
+        for (j in 0 until acts.length()) {
+            val a = acts.getJSONObject(j)
+            if (a.optString("cls") in RUN_CLASSES && a.has("km")) {
+                val km = a.optDouble("km", 0.0)
+                run += km
+                if (km > lng) lng = km
+            }
+        }
+        return round2(run) to round2(lng)
+    }
+
+    /** The logged (synced) acts of a week — those carrying a `strava_id`. */
+    fun loggedActs(week: JSONObject): JSONArray {
+        val acts = week.optJSONArray("acts") ?: return JSONArray()
+        val out = JSONArray()
+        for (j in 0 until acts.length()) {
+            val a = acts.getJSONObject(j)
+            if (a.has("strava_id")) out.put(a)
+        }
+        return out
+    }
+
+    /**
+     * Merges logged runs into a plan for the week in progress: keeps every logged
+     * act at its day, substitutes it for the plan's item on that day, and takes
+     * the plan for every day not yet logged. A logged day the plan doesn't mention
+     * is kept up front. Day labels share the `"EEE MMM d"` format on both sides.
+     */
+    fun mergeDoneIntoPlan(done: JSONArray, plan: JSONArray): JSONArray {
+        val loggedByDay = LinkedHashMap<String, MutableList<JSONObject>>()
+        for (j in 0 until done.length()) {
+            val a = done.getJSONObject(j)
+            loggedByDay.getOrPut(a.optString("d")) { mutableListOf() }.add(a)
+        }
+        val planDays = HashSet<String>()
+        for (j in 0 until plan.length()) planDays.add(plan.getJSONObject(j).optString("d"))
+        val merged = JSONArray()
+        val emitted = HashSet<String>()
+        for ((day, list) in loggedByDay) {
+            if (day !in planDays) { list.forEach { merged.put(it) }; emitted.add(day) }
+        }
+        for (j in 0 until plan.length()) {
+            val p = plan.getJSONObject(j)
+            val day = p.optString("d")
+            if (loggedByDay.containsKey(day)) {
+                if (emitted.add(day)) loggedByDay[day]!!.forEach { merged.put(it) }
+            } else {
+                merged.put(p)
+            }
+        }
+        return merged
     }
 
     // ── internals ───────────────────────────────────────────────────────────

@@ -275,68 +275,56 @@ class DriveService(private val context: Context) {
     private fun assembleTrainingData(drive: Drive, files: List<DriveFile>): String {
         val baseFile = latestVersion(files, TRAINING_DATA_BASE, "js")
             ?: error("No training_data*.js found in the Drive folder")
-        val baseJs = cachedDownload(drive, baseFile)
-        val overlays = runCatching { weekOverlayFiles(files) }.getOrDefault(emptyMap())
-        if (overlays.isEmpty()) return baseJs
-        val weeks = CompareRenderer.parseWeeks(baseJs)
-        var applied = 0
+        val weeks = CompareRenderer.parseWeeks(cachedDownload(drive, baseFile))
+        val planFiles = runCatching { weekOverlayFiles(files) }.getOrDefault(emptyMap())
+        val doneFiles = runCatching { weekDoneFiles(files) }.getOrDefault(emptyMap())
+        val today = java.time.LocalDate.now()
         for (i in 0 until weeks.length()) {
-            val w = weeks.getJSONObject(i)
-            val status = w.optString("status")
-            if (status == "actual") continue  // completed weeks are real history
-            val ovFile = overlays[w.optInt("n", -1)] ?: continue
-            val ov = runCatching { cachedDownload(drive, ovFile) }.getOrNull() ?: continue
-            val obj = runCatching {
-                org.json.JSONObject(ov.substring(ov.indexOf('{'), ov.lastIndexOf('}') + 1))
-            }.getOrNull() ?: continue
-            weeks.put(i, if (status == "current") mergeCurrentWeekOverlay(w, obj) else obj)
-            applied++
+            val bw = weeks.getJSONObject(i)
+            val n = bw.optInt("n", -1)
+            // Plan: the per-week plan file if present, else the base week's acts.
+            val planActs = (planFiles[n]?.let { parseWeekFile(drive, it) } ?: bw)
+                .optJSONArray("acts") ?: org.json.JSONArray()
+            // Actuals: the per-week done file if present, else the base week's
+            // already-logged (strava_id) acts. (Stage 1: done files don't exist
+            // yet, so this falls back to base — behaviour-preserving.)
+            val doneActs = doneFiles[n]?.let { parseWeekFile(drive, it)?.optJSONArray("acts") }
+                ?: SyncReconciler.loggedActs(bw)
+            val status = SyncReconciler.statusFor(n, today)
+            val acts = when (status) {
+                "actual" -> if (doneActs.length() > 0) doneActs else planActs  // what was done
+                "current" -> SyncReconciler.mergeDoneIntoPlan(doneActs, planActs)  // done + remaining plan
+                else -> planActs  // planned/future
+            }
+            bw.put("status", status)
+            bw.put("acts", acts)
+            val (rk, lk) = SyncReconciler.volumeFor(acts)
+            bw.put("runKm", rk)
+            bw.put("longKm", lk)
         }
-        return if (applied == 0) baseJs else "// AUTO-GENERATED\n\nconst WEEKS = $weeks;\n"
+        return "// AUTO-GENERATED\n\nconst WEEKS = $weeks;\n"
     }
 
-    /**
-     * Folds an overlay into the week in progress without dropping logged runs.
-     * Keeps every base act that carries a `strava_id` (a real, synced activity),
-     * substitutes it at its day in place of the overlay's plan for that day, and
-     * takes the overlay's prescription for every day not yet logged. Any logged
-     * day the plan doesn't mention (e.g. an unplanned run) is kept up front.
-     * Week metadata (dates/km targets) comes from the overlay; status stays
-     * `current`. Day labels share the `"EEE MMM d"` format on both sides.
-     */
-    private fun mergeCurrentWeekOverlay(base: org.json.JSONObject, ov: org.json.JSONObject): org.json.JSONObject {
-        val baseActs = base.optJSONArray("acts") ?: org.json.JSONArray()
-        val loggedByDay = LinkedHashMap<String, MutableList<org.json.JSONObject>>()
-        for (j in 0 until baseActs.length()) {
-            val a = baseActs.getJSONObject(j)
-            if (!a.has("strava_id")) continue  // planned base item — the overlay supersedes it
-            loggedByDay.getOrPut(a.optString("d")) { mutableListOf() }.add(a)
-        }
-        val ovActs = ov.optJSONArray("acts") ?: org.json.JSONArray()
-        val overlayDays = HashSet<String>()
-        for (j in 0 until ovActs.length()) overlayDays.add(ovActs.getJSONObject(j).optString("d"))
+    /** Parses a per-week plan/done file (`week_NN*.js`) into its JSON object, or
+     *  null on any read/parse error. */
+    private fun parseWeekFile(drive: Drive, file: DriveFile): org.json.JSONObject? =
+        runCatching {
+            val s = cachedDownload(drive, file)
+            org.json.JSONObject(s.substring(s.indexOf('{'), s.lastIndexOf('}') + 1))
+        }.getOrNull()
 
-        val merged = org.json.JSONArray()
-        val emitted = HashSet<String>()
-        // Logged days the plan doesn't cover come first (keeps chronology sane).
-        for ((day, list) in loggedByDay) {
-            if (day !in overlayDays) { list.forEach { merged.put(it) }; emitted.add(day) }
+    /** week-number → highest-version done file (`week_NN_done.js` / `_done_<v>.js`). */
+    private fun weekDoneFiles(files: List<DriveFile>): Map<Int, DriveFile> {
+        val rx = Regex("^${WEEK_OVERLAY_PREFIX}(\\d{2})_done(?:_(\\d+))?\\.js$")
+        val best = HashMap<Int, Pair<Int, DriveFile>>()
+        for (f in files) {
+            val m = rx.matchEntire(f.name) ?: continue
+            val week = m.groupValues[1].toInt()
+            val ver = m.groupValues[2].toIntOrNull() ?: 0
+            val cur = best[week]
+            if (cur == null || ver > cur.first) best[week] = ver to f
         }
-        // Walk the plan in order; a logged day shows its actual(s) instead.
-        for (j in 0 until ovActs.length()) {
-            val p = ovActs.getJSONObject(j)
-            val day = p.optString("d")
-            if (loggedByDay.containsKey(day)) {
-                if (emitted.add(day)) loggedByDay[day]!!.forEach { merged.put(it) }
-            } else {
-                merged.put(p)
-            }
-        }
-        val out = org.json.JSONObject(ov.toString())
-        out.put("status", "current")
-        if (base.has("dates")) out.put("dates", base.optString("dates"))
-        out.put("acts", merged)
-        return out
+        return best.mapValues { it.value.second }
     }
 
     /** Convenience for callers that only need the assembled data (one listing). */
@@ -355,17 +343,24 @@ class DriveService(private val context: Context) {
         val baseFile = latestVersion(files, TRAINING_DATA_BASE, "js")
             ?: error("No training_data*.js found in the Drive folder")
         val weeks = CompareRenderer.parseWeeks(cachedDownload(drive, baseFile))
-        val overlays = runCatching { weekOverlayFiles(files) }.getOrDefault(emptyMap())
+        val planFiles = runCatching { weekOverlayFiles(files) }.getOrDefault(emptyMap())
+        val doneFiles = runCatching { weekDoneFiles(files) }.getOrDefault(emptyMap())
+        val today = java.time.LocalDate.now()
         for (i in 0 until weeks.length()) {
-            val w = weeks.getJSONObject(i)
-            val ovFile = overlays[w.optInt("n", -1)] ?: continue
-            val ov = runCatching { cachedDownload(drive, ovFile) }.getOrNull() ?: continue
-            val ovActs = runCatching {
-                org.json.JSONObject(ov.substring(ov.indexOf('{'), ov.lastIndexOf('}') + 1))
-                    .optJSONArray("acts")
-            }.getOrNull() ?: continue
-            if (w.optString("status") == "planned") w.put("acts", ovActs)  // future: overlay is the plan
-            else w.put("plannedActs", ovActs)                              // done/current: keep actuals, add prescription
+            val bw = weeks.getJSONObject(i)
+            val n = bw.optInt("n", -1)
+            val planActs = (planFiles[n]?.let { parseWeekFile(drive, it) } ?: bw)
+                .optJSONArray("acts") ?: org.json.JSONArray()
+            val doneActs = doneFiles[n]?.let { parseWeekFile(drive, it)?.optJSONArray("acts") }
+                ?: SyncReconciler.loggedActs(bw)
+            val status = SyncReconciler.statusFor(n, today)
+            bw.put("status", status)
+            if (status == "planned") {
+                bw.put("acts", planActs)         // future: the plan is the content
+            } else {
+                bw.put("acts", doneActs)         // done/current: what was actually run
+                bw.put("plannedActs", planActs)  // + what was prescribed, to rate against
+            }
         }
         return "// AUTO-GENERATED (coach view: actuals + plannedActs)\n\nconst WEEKS = $weeks;\n"
     }
