@@ -183,8 +183,15 @@ object SyncReconciler {
         val date = parseDate(activity.startDateLocal)
         val week = weekByN(weeks, weekForDate(date)) ?: return
         val acts = week.optJSONArray("acts") ?: JSONArray().also { week.put("acts", it) }
+        // Remember which planned session the athlete matched this run to (by its
+        // day) BEFORE removing it, so the per-week assembly fulfils that exact
+        // plan item — not whichever one happens to share the run's calendar day.
+        val matchedDay = matchedIndex?.takeIf { it in 0 until acts.length() }
+            ?.let { acts.getJSONObject(it).optString("d") }
         if (matchedIndex != null && matchedIndex in 0 until acts.length()) acts.remove(matchedIndex)
-        acts.put(buildAct(activity, cls, date, feedback))
+        val act = buildAct(activity, cls, date, feedback)
+        if (!matchedDay.isNullOrEmpty()) act.put("matchedDay", matchedDay)
+        acts.put(act)
         recomputeWeek(week)
     }
 
@@ -258,31 +265,28 @@ object SyncReconciler {
     /**
      * Merges logged runs into a plan for the week in progress: keeps every logged
      * act at its day, substitutes it for the plan's item on that day, and takes
-     * the plan for every day not yet logged. A logged day the plan doesn't mention
-     * is kept up front. Day labels share the `"EEE MMM d"` format on both sides.
+     * the remaining plan.
+     *
+     * A logged run carries `matchedDay` — the day of the planned session the
+     * athlete matched it to during sync (absent for an "Other/unplanned" run).
+     * A plan item is dropped only when a run was explicitly matched to its day;
+     * every other planned session stays pending, and the logged runs follow.
+     * This mirrors the old reconcile (matched item removed, run appended) and,
+     * crucially, does NOT delete a same-day session the athlete didn't match to
+     * (e.g. a run done on a cross-training day leaves that session intact).
      */
     fun mergeDoneIntoPlan(done: JSONArray, plan: JSONArray): JSONArray {
-        val loggedByDay = LinkedHashMap<String, MutableList<JSONObject>>()
+        val fulfilled = HashSet<String>()
         for (j in 0 until done.length()) {
-            val a = done.getJSONObject(j)
-            loggedByDay.getOrPut(a.optString("d")) { mutableListOf() }.add(a)
+            val md = done.getJSONObject(j).optString("matchedDay", "")
+            if (md.isNotEmpty()) fulfilled.add(md)
         }
-        val planDays = HashSet<String>()
-        for (j in 0 until plan.length()) planDays.add(plan.getJSONObject(j).optString("d"))
         val merged = JSONArray()
-        val emitted = HashSet<String>()
-        for ((day, list) in loggedByDay) {
-            if (day !in planDays) { list.forEach { merged.put(it) }; emitted.add(day) }
-        }
         for (j in 0 until plan.length()) {
             val p = plan.getJSONObject(j)
-            val day = p.optString("d")
-            if (loggedByDay.containsKey(day)) {
-                if (emitted.add(day)) loggedByDay[day]!!.forEach { merged.put(it) }
-            } else {
-                merged.put(p)
-            }
+            if (p.optString("d") !in fulfilled) merged.put(p)  // still to do
         }
+        for (j in 0 until done.length()) merged.put(done.getJSONObject(j))  // logged runs
         return merged
     }
 
@@ -469,7 +473,7 @@ object SyncReconciler {
 
     private val WEEK_KEY_ORDER = listOf("n", "dates", "phase", "status", "runKm", "longKm", "acts")
     private val ACT_KEY_ORDER = listOf(
-        "d", "ic", "cls", "nm", "km", "sub", "flags", "desc", "strava_id", "notes", "athleteNotes",
+        "d", "ic", "cls", "nm", "km", "sub", "flags", "desc", "strava_id", "matchedDay", "notes", "athleteNotes",
         "intensity", "intensityLabel", "effort", "effortLabel",
         // legacy single-axis fields, kept so older logged runs pass through unchanged
         "difficulty", "difficultyLabel",
